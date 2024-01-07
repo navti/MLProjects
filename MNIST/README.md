@@ -81,4 +81,4 @@ python main.py --lr 0.01 --batch-size 64 --nf 32 --epochs 30 --save-model
 [![email](https://img.shields.io/badge/Gmail-D14836?style=for-the-badge&logo=gmail&logoColor=white)](mailto:navintiwari08@gmail.com)
 [![linkedin](https://img.shields.io/badge/linkedin-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/navti/)
 
-[Back To The Top](#MNIST-Classification-using-Neural-Network)
+[Back To The Top](#MNIST-Classification-using-Convolutional-Neural-Network-with-PyTorch)
