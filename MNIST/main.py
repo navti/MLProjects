@@ -9,9 +9,11 @@ from torch.utils.data import DataLoader
 from collections import defaultdict
 import sys
 
+import sys
 # add to path variable so module can be found
 root_dir = '/'.join(__file__.split('/')[:-2])
 sys.path.append(root_dir)
+from utils.utils import *
 
 def train_model(model, device, train_loader, loss_criterion, optimizer, epoch):
     model.train()
