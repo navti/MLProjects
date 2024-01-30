@@ -59,7 +59,7 @@ def parse_config(file="./config.json"):
     return images, masks
 
 # make dataset
-def make_dataset(config_file="./config.json")
+def make_dataset(config_file="./config.json"):
     image_transforms = transforms.Compose([
     transforms.ToTensor(),
     transforms.Resize((256, 256)),
