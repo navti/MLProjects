@@ -3,9 +3,9 @@ from torch.utils.data import Dataset
 import cv2
 import json
 import glob
+from torchvision.transforms import transforms
 
-
-__all__ = ['CVCDataset', 'ThresholdTransform', 'parse_config']
+__all__ = ['make_dataset']
 
 """
 Make custom CVC dataset
@@ -57,3 +57,20 @@ def parse_config(file="./config.json"):
     images = glob.glob(image_path+"*"+config['file_extn'])
     masks  = glob.glob(mask_path+"*"+config['file_extn'])
     return images, masks
+
+# make dataset
+def make_dataset(config_file="./config.json")
+    image_transforms = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Resize((256, 256)),
+    #transforms.Normalize()
+    ])
+
+    mask_transforms = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize((256, 256)),
+        ThresholdTransform()
+    ])
+    images, masks = parse_config(config_file)
+    imgset = CVCDataset(images, image_transforms, mask_transforms)
+    return imgset
