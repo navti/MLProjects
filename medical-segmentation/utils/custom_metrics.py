@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-__all__ = ['cusotm_iou', 'custom_dice']
+__all__ = ['custom_iou', 'custom_dice']
 
 # IoU metric
 
