@@ -4,6 +4,8 @@ from tqdm import tqdm
 
 from custom_metrics import *
 
+__all__ = ['evaluate']
+
 @torch.inference_mode()
 def evaluate(net, dataloader, device, amp):
     net.eval()
