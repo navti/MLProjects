@@ -1,0 +1,70 @@
+import re
+import nltk
+import seaborn as sns
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
+from nltk.corpus import stopwords
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import CountVectorizer
+
+# Initialize lemmatizer and get stopwords list
+lemmatizer = WordNetLemmatizer()
+stop_words = set(stopwords.words('english'))
+nltk.download('punkt_tab')
+nltk.download('wordnet')
+nltk.download('stopwords')
+
+def clean_data(df):
+    # Explore data
+    df.info()
+    df.head()
+    # Remove duplicates
+    df.drop_duplicates(ignore_index=True, inplace=True)
+    # Drop the column with the link, because it has no weight
+    df = df.drop(columns='article_link')
+    # View several headers for the example
+    list(df.head(10)['headline'])
+    # Check for class imbalance
+    sns.barplot(df.groupby('is_sarcastic').agg('count')['headline']);
+    # Header lengths
+    df.headline.str.len().describe()
+    # Calculate row lengths
+    df['length'] = df['headline'].str.len()
+    # Calculate quartiles and IQR
+    Q1 = df['length'].quantile(0.25)
+    Q3 = df['length'].quantile(0.75)
+    IQR = Q3 - Q1
+    # Determine bounds for outliers
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+    # Remove outliers
+    df_cleaned = df[(df['length'] >= lower_bound) & (df['length'] <= upper_bound)]
+    # Header lengths
+    df_cleaned.headline.str.len().describe()
+    # Remove column with row length
+    df_cleaned = df_cleaned.drop(columns='length')
+
+    return df_cleaned
+
+def preprocess_text(text):
+    # Remove special characters
+    text = re.sub(r'[^a-zA-Z\s]', '', text) # Keep only letters and spaces
+    # Tokenization
+    tokens = word_tokenize(text.lower()) # Convert to lowercase
+    # Remove stop words and lemmatization
+    cleaned_tokens = [lemmatizer.lemmatize(token) for token in tokens if token not in stop_words]
+    return ' '.join(cleaned_tokens)
+
+def prepare_data(df):
+    df['headline'] = df['headline'].apply(preprocess_text)
+    return df
+
+def data_split (df):
+    X_train, X_test, y_train, y_test = train_test_split(df['headline'], df['is_sarcastic'], test_size=0.3, random_state=42)
+    return X_train, X_test, y_train, y_test
+
+def vector(X_train, X_test):
+    vectorizer = CountVectorizer()
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
+    return X_train_vec, X_test_vec
