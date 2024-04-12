@@ -3,17 +3,18 @@ from time import time
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 import matplotlib.pyplot as plt
 
-def train_and_evaluate_models(X_train_vec, y_train, X_test_vec, y_test, prep_time, models):
+def train_and_evaluate_models(X_train_vec, y_train, X_test_vec, y_test, models):
 
     # Dictionaries for storing results
     results = {}
 
     # Training models and evaluating their performance
     for model_name, model in models.items():
-        start_time = time()  # Запуск таймера
+        start_time = time()
         model.fit(X_train_vec, y_train)
+        end_time = time()
         y_pred = model.predict(X_test_vec)
-        end_time = time()  # Остановка таймера
+        
 
         # Saving results taking into account preparation time
         results[model_name] = {
@@ -21,7 +22,7 @@ def train_and_evaluate_models(X_train_vec, y_train, X_test_vec, y_test, prep_tim
             'f1_score': f1_score(y_test, y_pred),
             'precision': precision_score(y_test, y_pred),
             'recall': recall_score(y_test, y_pred),
-            'time': (end_time - start_time) + prep_time
+            'time': (end_time - start_time)
         }
 
     # Convert results to DataFrame for convenience
