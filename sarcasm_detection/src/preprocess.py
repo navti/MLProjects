@@ -6,6 +6,8 @@ from nltk.stem import WordNetLemmatizer
 from nltk.corpus import stopwords
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import CountVectorizer
+import pickle
+import pathlib
 
 # Initialize lemmatizer and get stopwords list
 lemmatizer = WordNetLemmatizer()
@@ -67,4 +69,9 @@ def vector(X_train, X_test):
     vectorizer = CountVectorizer()
     X_train_vec = vectorizer.fit_transform(X_train)
     X_test_vec = vectorizer.transform(X_test)
+    model_dir = '../models'
+    pathlib.Path(model_dir).mkdir(parents=True, exist_ok=True)
+    vectorizer_path = f"{model_dir}/vectorizer.pkl"
+    with open(vectorizer_path, "wb") as vectorizer_file:
+        pickle.dump(vectorizer_path, vectorizer_file)
     return X_train_vec, X_test_vec

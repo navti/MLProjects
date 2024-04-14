@@ -41,7 +41,7 @@ if __name__ == "__main__":
 
 
     # save the best model
-    model_dir = './models'
+    model_dir = '../models'
     pathlib.Path(model_dir).mkdir(parents=True, exist_ok=True)
     save_model_path = f"{model_dir}/model.pkl"
     with open(save_model_path, "wb") as f:
