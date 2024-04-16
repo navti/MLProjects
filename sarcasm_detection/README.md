@@ -33,5 +33,17 @@ The list is fed to the input in the pipeline.py file (requires importing the cor
 The best model is selected based on the calculation of the model's KPI by the parameters:
 accuracy, recall, f1-score, precision, time normalized. The best KPI was found in the NB model.
 
-### TODO:
-- Support serving models.
+### Usage:
+```python
+cd src
+```
+
+train model:
+```python
+python pipeline.py
+```
+
+run inference:
+```python
+python run_inference.py
+```
