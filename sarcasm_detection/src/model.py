@@ -4,7 +4,15 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 import matplotlib.pyplot as plt
 
 def train_and_evaluate_models(X_train_vec, y_train, X_test_vec, y_test, models):
-
+    """
+    train and evaluate model with different scores
+    :param X_train_vec: vectorized feature input for training 
+    :param y_train: output labels for training input features 
+    :param X_test_vec: vectorized feature input for testing 
+    :param y_test: output labels for test data
+    :param models: list of models to test
+    :return: dataframe with results for various models
+    """
     # Dictionaries for storing results
     results = {}
 
@@ -34,7 +42,11 @@ def train_and_evaluate_models(X_train_vec, y_train, X_test_vec, y_test, models):
     return results_df
 
 def plot_metrics(results_df):
-    
+    """"
+    plot various scores for different models
+    :param results_df: dataframe with results for various models
+    :return: None
+    """
     fig, axs = plt.subplots(2, 2, figsize=(12, 5))
 
     # F1 Score
@@ -62,9 +74,13 @@ def plot_metrics(results_df):
     plt.tight_layout()
     plt.show()
 
-    return
-
 def best_model(results_df, models):
+    """"
+    Determine the best model
+    :param results_df: dataframe with results from various models
+    :param models: list of different models trained
+    :return: best model based on KPI
+    """
     # Time normalization
     results_df['normalized_time'] = (results_df['time'] - results_df['time'].min()) / (
                 results_df['time'].max() - results_df['time'].min())

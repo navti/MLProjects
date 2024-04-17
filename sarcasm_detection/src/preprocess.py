@@ -17,6 +17,11 @@ nltk.download('wordnet')
 nltk.download('stopwords')
 
 def clean_data(df):
+    """
+    clean headlines data set
+    :param df: dataframe containing the headlines and labels
+    :return: cleaned dataframe
+    """
     # Explore data
     df.info()
     df.head()
@@ -49,6 +54,11 @@ def clean_data(df):
     return df_cleaned
 
 def preprocess_text(text):
+    """
+    preprocess text before feeding to model
+    :param text: type str
+    :return: type str, after preprocessing
+    """
     # Remove special characters
     text = re.sub(r'[^a-zA-Z\s]', '', text) # Keep only letters and spaces
     # Tokenization
@@ -58,14 +68,34 @@ def preprocess_text(text):
     return ' '.join(cleaned_tokens)
 
 def prepare_data(df):
+    """
+    prepare data in dataframe
+    :param df: type pandas dataframe
+    :return: type pandas dataframe after data processing
+    """
     df['headline'] = df['headline'].apply(preprocess_text)
     return df
 
 def data_split (df):
+    """
+    split data into training and testing sets
+    :param df: type pandas dataframe
+    :return: 
+        X_train: train set features
+        X_test: test set features
+        y_train: train set labels
+        y_test: test set labels
+    """
     X_train, X_test, y_train, y_test = train_test_split(df['headline'], df['is_sarcastic'], test_size=0.3, random_state=42)
     return X_train, X_test, y_train, y_test
 
 def vector(X_train, X_test):
+    """
+    vectorize features
+    :param X_train: input training features
+    :param X_test: input test features
+    :return: vectorized train and test features
+    """
     vectorizer = CountVectorizer()
     X_train_vec = vectorizer.fit_transform(X_train)
     X_test_vec = vectorizer.transform(X_test)

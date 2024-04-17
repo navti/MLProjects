@@ -9,6 +9,9 @@ import pickle
 import pathlib
 
 
+"""
+main program to train models
+"""
 if __name__ == "__main__":
     file_name = 'Sarcasm_Headlines_Dataset_v2.json'
 

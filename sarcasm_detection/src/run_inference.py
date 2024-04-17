@@ -1,6 +1,9 @@
 import pickle
 from preprocess import *
 
+"""
+Run inference using the best model stored in model directory
+"""
 # load model and vectorizer
 model_dir = '../models'
 load_model_path = f"{model_dir}/model.pkl"

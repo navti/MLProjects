@@ -2,6 +2,10 @@ import pandas as pd
 import os
 
 def load_data(file_name):
+    """
+    load headlines data set from json file
+    :param file_name: json file name
+    """
     data_folder = '../data' # Data folder
 
     # Full path to the file
