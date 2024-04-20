@@ -69,20 +69,20 @@ class Discriminator(nn.Module):
 class GAN(nn.Module):
     def __init__(self, latent_dim=100):
         super(GAN, self).__init__()
+        self.latent_dim = latent_dim
         self.generator = Generator(latent_dim=latent_dim)
         self.discriminator = Discriminator()
     def forward(self, latent_vector):
         image = self.generator(latent_vector)
         is_real = self.discriminator(image)
-        return is_real
+        return image, is_real
 
 # test model
 if __name__ == "__main__":
     latent_dim = 100
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     test_model = GAN(latent_dim=latent_dim).to(device=device)
-    test_vector = torch.randn(size=(latent_dim,)).to(device=device)
-    gen_out = test_model.generator(test_vector)
+    test_vector = torch.randn(size=(5,latent_dim)).to(device=device)
+    gen_out, is_real = test_model(test_vector)
     print(gen_out.shape)
-    is_real = test_model.discriminator(gen_out)
-    print(is_real)
+    print(is_real.shape)
