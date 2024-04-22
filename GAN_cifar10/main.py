@@ -23,14 +23,50 @@ def print_training_parameters(args, device):
     print(f"Learning rate: {args.lr}")
     print(f"No. of filters: {args.nf}")
     print(f"Latent dimension: {args.latent_dim}")
-    print(f"Baseline beta: {args.baseline_beta}")
-    print(f"Annealing steps: {args.annealing_steps}")
-    print(f"Annealing shape: {args.annealing_shape}")
-    print(f"Annealing disabled: {args.annealing_disable}")
-    print(f"Cyclic annealing disabled: {args.annealing_cyclic_disable}")
     print(f"===========================================")
     print(f"")
 
+def save_gan_plots(losses, results_dir, name=None):
+    pathlib.Path(results_dir).mkdir(parents=True, exist_ok=True)
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    if not name:
+        save_plot_path = results_dir+"/plot-"+timestr
+    else:
+        save_plot_path = results_dir+"/"+name
+    epochs = len(losses['d_loss'])
+    plt.plot(range(1,epochs+1), losses['total_loss'], label='Total loss')
+    plt.plot(range(1,epochs+1), losses['gen_loss'], label='Generator loss')
+    plt.plot(range(1,epochs+1), losses['d_loss'], label='Discriminator loss')
+    #plt.plot(range(1,epochs+1), losses['cl_loss'], label='CL loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.title(f"GAN CIFAR10")
+    plt.savefig(save_plot_path, facecolor='w', edgecolor='none')
+    print(f"Plot saved at: {save_plot_path}")
+
+def generate_images(rows, cols, model, inference_dir, device, name=None):
+    model.eval()
+    pathlib.Path(inference_dir).mkdir(parents=True, exist_ok=True)
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    if not name:
+        save_fig_path = inference_dir+"/samples_"+timestr
+    else:
+        save_fig_path = inference_dir+"/"+name
+    z = torch.randn(size=(rows*cols, model.latent_dim), dtype=torch.float32).to(device)
+    xhat = model.generator(z)
+    xhat = torch.einsum('nchw->nhwc',xhat)
+    xhat = xhat.view(rows, cols, *xhat.shape[1:]).detach().cpu()
+    #print(xhat.shape)
+    fig, axs = plt.subplots(rows, cols, figsize=(cols,rows))
+    for A, I in zip(axs,xhat):
+        for ax, img in zip(A,I):
+            ax.set_aspect('equal')
+            ax.axis('off')
+            ax.imshow(img)
+    fig.tight_layout()
+    fig.subplots_adjust(hspace=0, wspace=0)
+    plt.savefig(save_fig_path, facecolor='w', edgecolor='none')
 
 def train_model(model, device, train_loader, optimizer, loss_criterion, epoch):
     model.train()
@@ -49,28 +85,28 @@ def train_model(model, device, train_loader, optimizer, loss_criterion, epoch):
         real_preds = model.discriminator(real_data)
         real_loss = loss_criterion(real_preds, ones)
         # get generator output and discriminator preds on it
-        _, fake_preds = model(latent_vectors)
+        fake_data = model.generator(latent_vectors)
+        # detach fake data from computation graph when feeding to discriminator
+        # because generator doesn't need to be updated in this step
+        fake_preds = model.discriminator(fake_data.detach())
+        # fake_data, fake_preds = model(latent_vectors)
         # discriminator loss on fake images
         fake_loss = loss_criterion(fake_preds, zeros)
         # total discriminator loss
         d_loss = real_loss + fake_loss
-        # compute all gradients
-        d_loss.backward()
         total_d_loss += d_loss.item()
-        # zero out gradients for generator computed in last step
-        # gradients for generator will be different
-        model.generator.zero_grad()
-        # update discriminator weights, generator grads are zero, so no update will happen there
+        # compute all gradients
+        d_loss.backward(retain_graph=True)
         optimizer.step()
-        optimizer.zero_grad()
-        # compute loss for discriminator whose gradients will be used to update the generator
+
+        # compute loss for generator using discriminator's output but generator's expectation
+        fake_preds = model.discriminator(fake_data)
         g_loss = loss_criterion(fake_preds, ones)
-        g_loss.backward()
+        g_loss.backward(retain_graph=False)
         total_gen_loss += g_loss.item()
         # zero out discriminator grad
         model.discriminator.zero_grad()
         optimizer.step()
-        # gather losses for logging
 
     avg_gen_loss = total_gen_loss/(batch_idx+1)
     avg_d_loss = total_d_loss/(batch_idx+1)
@@ -125,14 +161,14 @@ def main():
 
     print(f'using device: {device}')
     train_kwargs = {'batch_size': args.batch_size}
-    test_kwargs = {'batch_size': args.test_batch_size}
+    # test_kwargs = {'batch_size': args.test_batch_size}
     if use_cuda:
         cuda_kwargs = {'num_workers': 1,
                        'pin_memory': True,
                        'shuffle': True,
                        'drop_last': True}
         train_kwargs.update(cuda_kwargs)
-        test_kwargs.update(cuda_kwargs)
+        # test_kwargs.update(cuda_kwargs)
 
     data_dir = root_dir+"/data/"
     train_files = glob.glob(data_dir + '**/*_batch_*', recursive=True)
@@ -147,38 +183,37 @@ def main():
     train_loader = torch.utils.data.DataLoader(trainset,**train_kwargs)
 
     model = GAN(args.latent_dim).to(device)
-    opt_model = torch.compile(model)
-    optimizer = optim.Adadelta(opt_model.parameters(), lr=args.lr)
+    # opt_model = torch.compile(model)
+    optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
     scheduler = StepLR(optimizer, step_size=10, gamma=args.gamma)
     loss_criterion = nn.BCELoss()
-    #print_model_summary(model)
+    print(summary(model))
 
     print_training_parameters(args, device)
 
     # Run training loops
     losses = defaultdict(list)
     for epoch in range(1,args.epochs+1):
-        avg_loss, avg_recon_loss, avg_kl_loss, avg_cl_loss = train_model(opt_model, device, train_loader, optimizer, loss_criterion, epoch)
-        losses['total_loss'].append(avg_loss)
-        losses['recon_loss'].append(avg_recon_loss)
-        losses['kl_loss'].append(avg_kl_loss)
-        losses['cl_loss'].append(avg_cl_loss)
+        avg_gen_loss, avg_d_loss, avg_total_loss = train_model(model, device, train_loader, optimizer, loss_criterion, epoch)
+        losses['gen_loss'].append(avg_gen_loss)
+        losses['d_loss'].append(avg_d_loss)
+        losses['total_loss'].append(avg_total_loss)
         scheduler.step()
         if (args.dry_run):
             break
 
-    results_dir = root_dir+"/VAE/results"
+    results_dir = root_dir+"/GAN_cifar10/results"
     models_dir = results_dir+"/saved_models"
     inference_dir = results_dir+"/generated"
 
-    save_plots(losses, results_dir)
+    save_gan_plots(losses, results_dir, name="plot")
     # save model
-    model_name = f"VAE_CIFAR10_lr_{args.lr}"
+    model_name = f"GAN_CIFAR10_lr_{args.lr}"
     if (args.save_model):
         save_model(model, models_dir, name=model_name)
 
     # generate samples using the model
-    generate_samples(5,10,opt_model, inference_dir)
+    generate_images(5,10,model, inference_dir, device, name="sample")
 
 if __name__ == '__main__':
     main()
