@@ -126,7 +126,7 @@ def main():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--epochs', type=int, default=50, metavar='N',
                         help='number of epochs to train (default: 50)')
-    parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
+    parser.add_argument('--lr', type=float, default=1e-4, metavar='LR',
                         help='learning rate (default: 0.1)')
     parser.add_argument('--nf', type=int, default=32, metavar='NF',
                         help='no. of filters (default: 32)')
@@ -184,10 +184,11 @@ def main():
 
     model = GAN(args.latent_dim).to(device)
     # opt_model = torch.compile(model)
-    optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
+    # optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.5, 0.999))
     scheduler = StepLR(optimizer, step_size=10, gamma=args.gamma)
     loss_criterion = nn.BCELoss()
-    print(summary(model))
+    summary(model)
 
     print_training_parameters(args, device)
 
@@ -198,7 +199,7 @@ def main():
         losses['gen_loss'].append(avg_gen_loss)
         losses['d_loss'].append(avg_d_loss)
         losses['total_loss'].append(avg_total_loss)
-        scheduler.step()
+        # scheduler.step()
         if (args.dry_run):
             break
 
