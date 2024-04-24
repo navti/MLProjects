@@ -52,30 +52,37 @@ class ConvBlock(nn.Module):
         return self.conv(image)
 
 class Discriminator(nn.Module):
-    def __init__(self):
+    def __init__(self, n_classes):
         super(Discriminator, self).__init__()
-        self.discriminate = nn.Sequential(
+        self.n_classes = n_classes
+        self.backbone = nn.Sequential(
             ConvBlock(3, 64, 4, 2, 1),
             ConvBlock(64, 128, 4, 2, 1),
             ConvBlock(128, 256, 4, 2, 1),
             ConvBlock(256, 512, 4, 2, 1),
-            ConvBlock(512, 1, 4, 2, 1, use_batchnorm=False, use_activations=False),
+        )
+        self.clf = ConvBlock(512, n_classes, 4, 2, 1)
+        self.discriminate = nn.Sequential(
+            ConvBlock(n_classes, 1, 3, 1, 1, use_batchnorm=False, use_activations=False),
             nn.Sigmoid()
         )
-    
+
     def forward(self, image):
-        return self.discriminate(image).view(-1)
+        out = self.backbone(image)
+        labels = self.clf(out)
+        return self.discriminate(labels).view(-1), labels.squeeze()
 
 class GAN(nn.Module):
-    def __init__(self, latent_dim=100):
+    def __init__(self, n_classes, latent_dim=100):
         super(GAN, self).__init__()
+        self.n_classes = n_classes
         self.latent_dim = latent_dim
         self.generator = Generator(latent_dim=latent_dim)
-        self.discriminator = Discriminator()
+        self.discriminator = Discriminator(n_classes=n_classes)
     def forward(self, latent_vector):
         image = self.generator(latent_vector)
-        is_real = self.discriminator(image)
-        return image, is_real
+        is_real, labels = self.discriminator(image)
+        return image, is_real, labels
 
 # test model
 if __name__ == "__main__":

@@ -68,39 +68,41 @@ def generate_images(rows, cols, model, inference_dir, device, name=None):
     fig.subplots_adjust(hspace=0, wspace=0)
     plt.savefig(save_fig_path, facecolor='w', edgecolor='none')
 
-def train_model(model, device, train_loader, optimizer, loss_criterion, epoch):
+def train_model(model, device, train_loader, optimizer, loss_criterion, clf_loss_criterion, epoch):
     model.train()
     total_gen_loss = 0
     total_d_loss = 0
-    for batch_idx, (real_data, _) in enumerate(train_loader):
+    for batch_idx, (real_data, real_labels) in enumerate(train_loader):
         batch_size = len(real_data)
         # real samples
         real_data = real_data.to(device)
+        real_labels = real_labels.to(device)
         ones = torch.ones((batch_size), dtype=torch.float32).to(device)
         # sample from normal distribution
         latent_vectors = torch.randn(size=(batch_size, model.latent_dim), dtype=torch.float32).to(device)
         zeros = torch.zeros((batch_size), dtype=torch.float32).to(device)
         optimizer.zero_grad()
         # discriminator loss on real data
-        real_preds = model.discriminator(real_data)
+        real_preds, real_label_preds = model.discriminator(real_data)
         real_loss = loss_criterion(real_preds, ones)
+        clf_loss = clf_loss_criterion(real_label_preds, real_labels)
         # get generator output and discriminator preds on it
         fake_data = model.generator(latent_vectors)
         # detach fake data from computation graph when feeding to discriminator
         # because generator doesn't need to be updated in this step
-        fake_preds = model.discriminator(fake_data.detach())
-        # fake_data, fake_preds = model(latent_vectors)
+        fake_preds, _ = model.discriminator(fake_data.detach())
         # discriminator loss on fake images
         fake_loss = loss_criterion(fake_preds, zeros)
         # total discriminator loss
-        d_loss = real_loss + fake_loss
+        alpha = 0
+        d_loss = real_loss + fake_loss + alpha*clf_loss
         total_d_loss += d_loss.item()
         # compute all gradients
         d_loss.backward(retain_graph=True)
         optimizer.step()
 
         # compute loss for generator using discriminator's output but generator's expectation
-        fake_preds = model.discriminator(fake_data)
+        fake_preds, _ = model.discriminator(fake_data)
         g_loss = loss_criterion(fake_preds, ones)
         g_loss.backward(retain_graph=False)
         total_gen_loss += g_loss.item()
@@ -182,12 +184,13 @@ def main():
     # data loaders
     train_loader = torch.utils.data.DataLoader(trainset,**train_kwargs)
 
-    model = GAN(args.latent_dim).to(device)
+    model = GAN(args.n_classes, args.latent_dim).to(device)
     # opt_model = torch.compile(model)
     # optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.5, 0.999))
     scheduler = StepLR(optimizer, step_size=10, gamma=args.gamma)
     loss_criterion = nn.BCELoss()
+    clf_loss_criterion = nn.CrossEntropyLoss()
     summary(model)
 
     print_training_parameters(args, device)
@@ -195,7 +198,7 @@ def main():
     # Run training loops
     losses = defaultdict(list)
     for epoch in range(1,args.epochs+1):
-        avg_gen_loss, avg_d_loss, avg_total_loss = train_model(model, device, train_loader, optimizer, loss_criterion, epoch)
+        avg_gen_loss, avg_d_loss, avg_total_loss = train_model(model, device, train_loader, optimizer, loss_criterion, clf_loss_criterion, epoch)
         losses['gen_loss'].append(avg_gen_loss)
         losses['d_loss'].append(avg_d_loss)
         losses['total_loss'].append(avg_total_loss)
