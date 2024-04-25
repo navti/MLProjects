@@ -79,7 +79,8 @@ def train_model(model, device, train_loader, optimizer, loss_criterion, clf_loss
         real_labels = real_labels.to(device)
         ones = torch.ones((batch_size), dtype=torch.float32).to(device)
         # sample from normal distribution
-        latent_vectors = torch.randn(size=(batch_size, model.latent_dim), dtype=torch.float32).to(device)
+        # latent_vectors = torch.randn(size=(batch_size, model.latent_dim), dtype=torch.float32).to(device)
+        latent_vectors = model.generator.sample_latent_vectors(n_samples=batch_size)
         zeros = torch.zeros((batch_size), dtype=torch.float32).to(device)
         optimizer.zero_grad()
         # discriminator loss on real data
@@ -94,7 +95,7 @@ def train_model(model, device, train_loader, optimizer, loss_criterion, clf_loss
         # discriminator loss on fake images
         fake_loss = loss_criterion(fake_preds, zeros)
         # total discriminator loss
-        alpha = 0
+        alpha = 1
         d_loss = real_loss + fake_loss + alpha*clf_loss
         total_d_loss += d_loss.item()
         # compute all gradients
@@ -128,13 +129,13 @@ def main():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--epochs', type=int, default=50, metavar='N',
                         help='number of epochs to train (default: 50)')
-    parser.add_argument('--lr', type=float, default=1e-4, metavar='LR',
+    parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
                         help='learning rate (default: 0.1)')
     parser.add_argument('--nf', type=int, default=32, metavar='NF',
                         help='no. of filters (default: 32)')
     parser.add_argument('--latent-dim', type=int, default=100, metavar='LD',
                         help='size of latent dimension (default: 128)')
-    parser.add_argument('--gamma', type=float, default=0.1, metavar='M',
+    parser.add_argument('--gamma', type=float, default=1e-4, metavar='M',
                         help='Learning rate step gamma (default: 0.1)')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
@@ -184,11 +185,11 @@ def main():
     # data loaders
     train_loader = torch.utils.data.DataLoader(trainset,**train_kwargs)
 
-    model = GAN(args.n_classes, args.latent_dim).to(device)
+    model = GAN(args.n_classes, device, args.latent_dim).to(device)
     # opt_model = torch.compile(model)
     # optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.5, 0.999))
-    scheduler = StepLR(optimizer, step_size=10, gamma=args.gamma)
+    scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     loss_criterion = nn.BCELoss()
     clf_loss_criterion = nn.CrossEntropyLoss()
     summary(model)
@@ -212,7 +213,7 @@ def main():
 
     save_gan_plots(losses, results_dir, name="plot")
     # save model
-    model_name = f"GAN_CIFAR10_lr_{args.lr}"
+    model_name = f"GAN_CIFAR10"
     if (args.save_model):
         save_model(model, models_dir, name=model_name)
 
