@@ -32,13 +32,14 @@ class Generator(nn.Module):
     def __init__(self, device, latent_dim=100):
         super(Generator, self).__init__()
         self.latent_dim = latent_dim
+        self.device = device
         self.mean = nn.parameter.Parameter(
-            data=torch.zeros(size=(1, latent_dim), dtype=torch.float32, requires_grad=True)
+            data=torch.zeros(size=(1, latent_dim), dtype=torch.float32, requires_grad=False)
         )
         self.log_var = nn.parameter.Parameter(
-            data=torch.ones(size=(1, latent_dim), dtype=torch.float32, requires_grad=True)
+            data=torch.ones(size=(1, latent_dim), dtype=torch.float32, requires_grad=False)
         )
-        self.N = torch.distributions.Normal(loc=0, scale=1.0)
+        self.N = torch.distributions.Normal(loc=0.0, scale=0.5)
         self.N.loc = self.N.loc.to(device)
         self.N.scale = self.N.scale.to(device)
         self.generate = nn.Sequential(
@@ -46,14 +47,17 @@ class Generator(nn.Module):
             UpConv(512, 256, 4, 2, 1),
             UpConv(256, 128, 4, 2, 1),
             UpConv(128, 64, 4, 2, 1),
-            UpConv(64, 3, 4, 2, 1, use_activations=False),
+            UpConv(64, 32, 4, 2, 1),
+            UpConv(32, 3, 3, 1, 1, use_batchnorm=True, use_activations=False),
             nn.Sigmoid()
         )
+        self.eval_noise = self.sample_latent_vectors(n_samples=50)
+        self.eval_noise = self.eval_noise.to(device)
 
     def sample_latent_vectors(self, n_samples):
         epsilon = self.N.sample(sample_shape=(n_samples, self.latent_dim))
-        sigma = torch.exp(self.log_var/2).expand(n_samples, self.latent_dim)
-        u = self.mean.expand(n_samples, self.latent_dim)
+        sigma = torch.exp(self.log_var/2).expand(n_samples, self.latent_dim).to(self.device)
+        u = self.mean.expand(n_samples, self.latent_dim).to(self.device)
         latent_vectors = u + sigma*epsilon
         return latent_vectors
 
@@ -90,18 +94,18 @@ class Discriminator(nn.Module):
             ConvBlock(64, 128, 4, 2, 1),
             ConvBlock(128, 256, 4, 2, 1),
             ConvBlock(256, 512, 4, 2, 1),
-            ConvBlock(512, 256, 3, 1, 1),
+            ConvBlock(512, 256, 4, 2, 1),
         )
-        self.clf = ConvBlock(256, n_classes, 4, 2, 1, use_batchnorm=False, use_activations=True)
+        self.clf = ConvBlock(256, n_classes, 3, 1, 1, use_batchnorm=False, use_activations=False)
         self.discriminate = nn.Sequential(
-            ConvBlock(n_classes, 1, 3, 1, 1, use_batchnorm=False, use_activations=False),
+            ConvBlock(256, 1, 3, 1, 1, use_batchnorm=False, use_activations=False),
             nn.Sigmoid()
         )
 
     def forward(self, image):
         out = self.backbone(image)
         labels = self.clf(out)
-        return self.discriminate(labels).view(-1), labels.squeeze()
+        return self.discriminate(out).view(-1), labels.squeeze()
 
 class GAN(nn.Module):
     def __init__(self, n_classes, device, latent_dim=100):

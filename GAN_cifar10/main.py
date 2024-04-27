@@ -45,15 +45,15 @@ def save_gan_plots(losses, results_dir, name=None):
     plt.savefig(save_plot_path, facecolor='w', edgecolor='none')
     print(f"Plot saved at: {save_plot_path}")
 
-def generate_images(rows, cols, model, inference_dir, device, name=None):
-    model.eval()
+def generate_images(rows, cols, model, inference_dir, device, z=None, name=None):
     pathlib.Path(inference_dir).mkdir(parents=True, exist_ok=True)
     timestr = time.strftime("%Y%m%d-%H%M%S")
     if not name:
         save_fig_path = inference_dir+"/samples_"+timestr
     else:
         save_fig_path = inference_dir+"/"+name
-    z = torch.randn(size=(rows*cols, model.latent_dim), dtype=torch.float32).to(device)
+    if z == None:
+        z = torch.randn(size=(rows*cols, model.latent_dim), dtype=torch.float32).to(device)
     xhat = model.generator(z)
     xhat = torch.einsum('nchw->nhwc',xhat)
     xhat = xhat.view(rows, cols, *xhat.shape[1:]).detach().cpu()
@@ -67,8 +67,10 @@ def generate_images(rows, cols, model, inference_dir, device, name=None):
     fig.tight_layout()
     fig.subplots_adjust(hspace=0, wspace=0)
     plt.savefig(save_fig_path, facecolor='w', edgecolor='none')
+    plt.close(fig)
 
-def train_model(model, device, train_loader, gen_optimizer, d_optimizer, loss_criterion, clf_loss_criterion, epoch):
+def train_model(model, device, train_loader, gen_optimizer, d_optimizer,
+                loss_criterion, clf_loss_criterion, epoch):
     model.train()
     total_gen_loss = 0
     total_d_loss = 0
@@ -82,7 +84,6 @@ def train_model(model, device, train_loader, gen_optimizer, d_optimizer, loss_cr
         real_labels = real_labels.to(device)
         ones = torch.ones((batch_size), dtype=torch.float32).to(device)
         # sample from normal distribution
-        # latent_vectors = torch.randn(size=(batch_size, model.latent_dim), dtype=torch.float32).to(device)
         latent_vectors = model.generator.sample_latent_vectors(n_samples=batch_size)
         zeros = torch.zeros((batch_size), dtype=torch.float32).to(device)
 
@@ -105,7 +106,6 @@ def train_model(model, device, train_loader, gen_optimizer, d_optimizer, loss_cr
         # compute all gradients
         d_loss.backward()
         # clear out gradients for generator. Generator shouldn't help discriminator
-        # model.generator.zero_grad()
         d_optimizer.step()
 
         gen_optimizer.zero_grad()
@@ -115,10 +115,7 @@ def train_model(model, device, train_loader, gen_optimizer, d_optimizer, loss_cr
         g_loss = beta * loss_criterion(fake_preds, ones)
         g_loss.backward()
         total_gen_loss += g_loss.item()
-        # zero out discriminator grad
-        # model.discriminator.zero_grad()
         gen_optimizer.step()
-
     avg_gen_loss = total_gen_loss/(batch_idx+1)
     avg_d_loss = total_d_loss/(batch_idx+1)
     avg_total_loss = avg_gen_loss + avg_d_loss
@@ -133,13 +130,13 @@ def main():
                         help='input channels in the images. (default: 3)')
     parser.add_argument('--n-classes', type=int, default=10, metavar='C',
                         help='no. of classes. (default: 10)')
-    parser.add_argument('--batch-size', type=int, default=64, metavar='N',
+    parser.add_argument('--batch-size', type=int, default=128, metavar='N',
                         help='input batch size for training (default: 64)')
     parser.add_argument('--epochs', type=int, default=50, metavar='N',
                         help='number of epochs to train (default: 50)')
-    parser.add_argument('--gen-lr', type=float, default=1e-4, metavar='LR',
+    parser.add_argument('--gen-lr', type=float, default=3e-4, metavar='LR',
                         help='learning rate for generator (default: 1e-4)')
-    parser.add_argument('--d-lr', type=float, default=1e-4, metavar='LR',
+    parser.add_argument('--d-lr', type=float, default=3e-4, metavar='LR',
                         help='learning rate for discriminator (default: 1e-4)')
     parser.add_argument('--nf', type=int, default=32, metavar='NF',
                         help='no. of filters (default: 32)')
@@ -207,6 +204,10 @@ def main():
 
     print_training_parameters(args, device)
 
+    results_dir = root_dir+"/GAN_cifar10/results"
+    models_dir = results_dir+"/saved_models"
+    inference_dir = results_dir+"/generated"
+
     # Run training loops
     losses = defaultdict(list)
     for epoch in range(1,args.epochs+1):
@@ -214,13 +215,12 @@ def main():
         losses['gen_loss'].append(avg_gen_loss)
         losses['d_loss'].append(avg_d_loss)
         losses['total_loss'].append(avg_total_loss)
+        # generate a batch of images with fixed noise to evaluate generator
+        model.eval()
+        generate_images(5,10,model, inference_dir, device, z=model.generator.eval_noise, name=f"epoch_{epoch}")
         # scheduler.step()
         if (args.dry_run):
             break
-
-    results_dir = root_dir+"/GAN_cifar10/results"
-    models_dir = results_dir+"/saved_models"
-    inference_dir = results_dir+"/generated"
 
     save_gan_plots(losses, results_dir, name="plot")
     # save model
@@ -229,6 +229,7 @@ def main():
         save_model(model, models_dir, name=model_name)
 
     # generate samples using the model
+    model.eval()
     generate_images(5,10,model, inference_dir, device, name="sample")
 
 if __name__ == '__main__':
