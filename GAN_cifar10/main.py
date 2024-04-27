@@ -20,8 +20,8 @@ def print_training_parameters(args, device):
     print(f"Using device: {device}")
     print(f"Batch size: {args.batch_size}")
     print(f"Epochs: {args.epochs}")
-    print(f"Learning rate: {args.lr}")
-    print(f"No. of filters: {args.nf}")
+    print(f"Generator Learning rate: {args.gen_lr}")
+    print(f"Discriminator Learning rate: {args.d_lr}")
     print(f"Latent dimension: {args.latent_dim}")
     print(f"===========================================")
     print(f"")
@@ -68,21 +68,25 @@ def generate_images(rows, cols, model, inference_dir, device, name=None):
     fig.subplots_adjust(hspace=0, wspace=0)
     plt.savefig(save_fig_path, facecolor='w', edgecolor='none')
 
-def train_model(model, device, train_loader, optimizer, loss_criterion, clf_loss_criterion, epoch):
+def train_model(model, device, train_loader, gen_optimizer, d_optimizer, loss_criterion, clf_loss_criterion, epoch):
     model.train()
     total_gen_loss = 0
     total_d_loss = 0
     for batch_idx, (real_data, real_labels) in enumerate(train_loader):
         batch_size = len(real_data)
+        noise = torch.normal(mean=0, std=0.1, size=real_data.size()).to(device)
+        # noise /= epoch
         # real samples
         real_data = real_data.to(device)
+        # real_data += noise/epoch
         real_labels = real_labels.to(device)
         ones = torch.ones((batch_size), dtype=torch.float32).to(device)
         # sample from normal distribution
         # latent_vectors = torch.randn(size=(batch_size, model.latent_dim), dtype=torch.float32).to(device)
         latent_vectors = model.generator.sample_latent_vectors(n_samples=batch_size)
         zeros = torch.zeros((batch_size), dtype=torch.float32).to(device)
-        optimizer.zero_grad()
+
+        d_optimizer.zero_grad()
         # discriminator loss on real data
         real_preds, real_label_preds = model.discriminator(real_data)
         real_loss = loss_criterion(real_preds, ones)
@@ -96,26 +100,30 @@ def train_model(model, device, train_loader, optimizer, loss_criterion, clf_loss
         fake_loss = loss_criterion(fake_preds, zeros)
         # total discriminator loss
         alpha = 1
-        d_loss = real_loss + fake_loss + alpha*clf_loss
+        d_loss = 1*(real_loss + fake_loss) + alpha*clf_loss
         total_d_loss += d_loss.item()
         # compute all gradients
-        d_loss.backward(retain_graph=True)
-        optimizer.step()
+        d_loss.backward()
+        # clear out gradients for generator. Generator shouldn't help discriminator
+        # model.generator.zero_grad()
+        d_optimizer.step()
 
+        gen_optimizer.zero_grad()
         # compute loss for generator using discriminator's output but generator's expectation
         fake_preds, _ = model.discriminator(fake_data)
-        g_loss = loss_criterion(fake_preds, ones)
-        g_loss.backward(retain_graph=False)
+        beta = 1
+        g_loss = beta * loss_criterion(fake_preds, ones)
+        g_loss.backward()
         total_gen_loss += g_loss.item()
         # zero out discriminator grad
-        model.discriminator.zero_grad()
-        optimizer.step()
+        # model.discriminator.zero_grad()
+        gen_optimizer.step()
 
     avg_gen_loss = total_gen_loss/(batch_idx+1)
     avg_d_loss = total_d_loss/(batch_idx+1)
     avg_total_loss = avg_gen_loss + avg_d_loss
     print(f"Train epoch: {epoch} [{(batch_idx+1) * len(real_data)}/{len(train_loader.dataset)}]\
-          \tGen Loss: {avg_gen_loss:.6f}\tDiscriminator Loss: {avg_d_loss:.6f}")
+          \tGenerator Loss: {avg_gen_loss:.6f}\tDiscriminator Loss: {avg_d_loss:.6f}")
     return avg_gen_loss, avg_d_loss, avg_total_loss
 
 
@@ -129,8 +137,10 @@ def main():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--epochs', type=int, default=50, metavar='N',
                         help='number of epochs to train (default: 50)')
-    parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
-                        help='learning rate (default: 0.1)')
+    parser.add_argument('--gen-lr', type=float, default=1e-4, metavar='LR',
+                        help='learning rate for generator (default: 1e-4)')
+    parser.add_argument('--d-lr', type=float, default=1e-4, metavar='LR',
+                        help='learning rate for discriminator (default: 1e-4)')
     parser.add_argument('--nf', type=int, default=32, metavar='NF',
                         help='no. of filters (default: 32)')
     parser.add_argument('--latent-dim', type=int, default=100, metavar='LD',
@@ -188,8 +198,9 @@ def main():
     model = GAN(args.n_classes, device, args.latent_dim).to(device)
     # opt_model = torch.compile(model)
     # optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.5, 0.999))
-    scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
+    gen_optimizer = optim.Adam(model.generator.parameters(), lr=args.gen_lr, betas=(0.5, 0.999))
+    d_optimizer = optim.Adam(model.discriminator.parameters(), lr=args.d_lr, betas=(0.5, 0.999))
+    # scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     loss_criterion = nn.BCELoss()
     clf_loss_criterion = nn.CrossEntropyLoss()
     summary(model)
@@ -199,7 +210,7 @@ def main():
     # Run training loops
     losses = defaultdict(list)
     for epoch in range(1,args.epochs+1):
-        avg_gen_loss, avg_d_loss, avg_total_loss = train_model(model, device, train_loader, optimizer, loss_criterion, clf_loss_criterion, epoch)
+        avg_gen_loss, avg_d_loss, avg_total_loss = train_model(model, device, train_loader, gen_optimizer, d_optimizer, loss_criterion, clf_loss_criterion, epoch)
         losses['gen_loss'].append(avg_gen_loss)
         losses['d_loss'].append(avg_d_loss)
         losses['total_loss'].append(avg_total_loss)

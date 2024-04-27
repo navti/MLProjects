@@ -18,7 +18,7 @@ class UpConv(nn.Module):
         if use_batchnorm:
             layers.append(nn.BatchNorm2d(out_channels))
         if use_activations:
-            relu = nn.ReLU()
+            relu = nn.LeakyReLU(0.2) # nn.ReLU()
             layers.append(relu) if activation_last else layers.insert(1, relu)
         # initialize weights
         # for layer in layers:
@@ -46,7 +46,7 @@ class Generator(nn.Module):
             UpConv(512, 256, 4, 2, 1),
             UpConv(256, 128, 4, 2, 1),
             UpConv(128, 64, 4, 2, 1),
-            UpConv(64, 3, 4, 2, 1, use_batchnorm=False, use_activations=False),
+            UpConv(64, 3, 4, 2, 1, use_activations=False),
             nn.Sigmoid()
         )
 
@@ -72,7 +72,7 @@ class ConvBlock(nn.Module):
         if use_batchnorm:
             layers.append(nn.BatchNorm2d(out_channels))
         if use_activations:
-            relu = nn.ReLU()
+            relu = nn.LeakyReLU(0.2) # nn.ReLU()
             layers.append(relu) if activation_last else layers.insert(1, relu)
         # for layer in layers:
         #     layer.apply(weights_init)
@@ -92,7 +92,7 @@ class Discriminator(nn.Module):
             ConvBlock(256, 512, 4, 2, 1),
             ConvBlock(512, 256, 3, 1, 1),
         )
-        self.clf = ConvBlock(256, n_classes, 4, 2, 1, use_batchnorm=False, use_activations=False)
+        self.clf = ConvBlock(256, n_classes, 4, 2, 1, use_batchnorm=False, use_activations=True)
         self.discriminate = nn.Sequential(
             ConvBlock(n_classes, 1, 3, 1, 1, use_batchnorm=False, use_activations=False),
             nn.Sigmoid()
