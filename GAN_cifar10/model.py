@@ -34,10 +34,10 @@ class Generator(nn.Module):
         self.latent_dim = latent_dim
         self.device = device
         self.mean = nn.parameter.Parameter(
-            data=torch.zeros(size=(1, latent_dim), dtype=torch.float32, requires_grad=False)
+            data=torch.zeros(size=(1, latent_dim), dtype=torch.float32, requires_grad=True)
         )
         self.log_var = nn.parameter.Parameter(
-            data=torch.ones(size=(1, latent_dim), dtype=torch.float32, requires_grad=False)
+            data=torch.ones(size=(1, latent_dim), dtype=torch.float32, requires_grad=True)
         )
         self.N = torch.distributions.Normal(loc=0.0, scale=0.5)
         self.N.loc = self.N.loc.to(device)

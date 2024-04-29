@@ -217,7 +217,9 @@ def main():
         losses['total_loss'].append(avg_total_loss)
         # generate a batch of images with fixed noise to evaluate generator
         model.eval()
-        generate_images(5,10,model, inference_dir, device, z=model.generator.eval_noise, name=f"epoch_{epoch}")
+        z = model.generator.sample_latent_vectors(n_samples=50)
+        # z = model.generator.eval_noise
+        generate_images(5,10,model, inference_dir, device, z=z, name=f"epoch_{epoch}")
         # scheduler.step()
         if (args.dry_run):
             break
