@@ -15,6 +15,12 @@ torch.set_float32_matmul_precision('high')
 from utils.cifar_utils import *
 
 def print_training_parameters(args, device):
+    """
+    print training parameters of the model
+    :param args: args containing params
+    :param device: device being used to host the model
+    :returns: None
+    """
     print(f"")
     print(f"=========== Training Parameters ===========")
     print(f"Using device: {device}")
@@ -27,6 +33,13 @@ def print_training_parameters(args, device):
     print(f"")
 
 def save_gan_plots(losses, results_dir, name=None):
+    """
+    save loss plots for GAN
+    :param losses: dict object containing generator and discriminator losses
+    :param results_dir: directory to store the plots in
+    :param name: name of saved plot
+    :returns: None
+    """
     pathlib.Path(results_dir).mkdir(parents=True, exist_ok=True)
     timestr = time.strftime("%Y%m%d-%H%M%S")
     if not name:
@@ -46,6 +59,16 @@ def save_gan_plots(losses, results_dir, name=None):
     print(f"Plot saved at: {save_plot_path}")
 
 def generate_images(rows, cols, model, inference_dir, device, z=None, name=None):
+    """
+    generate sample images using the model
+    :param rows: rows of images in the figure
+    :param cols: columns of images in the figure
+    :param inference_dir: directory where the sample images to store
+    :param device: device where model should be run
+    :param z: the noise vector to use with generator, if none, one will be created
+    :param name: name of figure to save
+    :returns: None
+    """
     pathlib.Path(inference_dir).mkdir(parents=True, exist_ok=True)
     timestr = time.strftime("%Y%m%d-%H%M%S")
     if not name:
@@ -71,6 +94,21 @@ def generate_images(rows, cols, model, inference_dir, device, z=None, name=None)
 
 def train_model(model, device, train_loader, gen_optimizer, d_optimizer,
                 loss_criterion, clf_loss_criterion, epoch):
+    """
+    run one training loop
+    :param model: model to train
+    :param device: device hosting the model
+    :param train_loader: data loader with train images
+    :param gen_optimizer: optimizer used for the generator
+    :param d_optimizer: optimizer used for the discriminator
+    :param loss_criterion: loss function to use
+    :param clf_loss_criterion: loss function to use for classification loss
+    :param epoch: epoch/iteration number
+    :returns:
+        avg_gen_loss: generator loss
+        avg_d_loss: discriminator loss
+        avg_total_loss: total loss
+    """
     model.train()
     total_gen_loss = 0
     total_d_loss = 0
@@ -125,6 +163,10 @@ def train_model(model, device, train_loader, gen_optimizer, d_optimizer,
 
 
 def main():
+    """
+    main program starts here
+    """
+    # parse command line arguments
     parser = argparse.ArgumentParser(description="PyTorch CIFAR-10 GAN")
     parser.add_argument('--input-channels', type=int, default=3, metavar='IN',
                         help='input channels in the images. (default: 3)')
@@ -162,6 +204,7 @@ def main():
 
     torch.manual_seed(args.seed)
 
+    # set device for model
     if use_cuda:
         device = torch.device("cuda")
     elif use_mps:
