@@ -3,14 +3,18 @@ import argparse
 import glob
 from torch import optim
 from torch.optim.lr_scheduler import StepLR
-from utils import *
 from models import *
+
+import sys
+sys.path.insert(1, './..')
+from utils.cifar_utils import *
 
 def train_model(args, model, device, train_loader, loss_criterion, optimizer, epoch):
     model.train()
     train_loss = 0
     total = 0
     total_acc = 0
+    lr = optimizer.param_groups[0]['lr']
     for batchidx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
@@ -55,11 +59,11 @@ def main():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=50, metavar='N',
+    parser.add_argument('--epochs', type=int, default=30, metavar='N',
                         help='number of epochs to train (default: 14)')
-    parser.add_argument('--lr', type=float, default=0.25, metavar='LR',
+    parser.add_argument('--lr', type=float, default=1.0, metavar='LR',
                         help='learning rate (default: 0.5)')
-    parser.add_argument('--nf', type=int, default=32, metavar='NF',
+    parser.add_argument('--nf', type=int, default=64, metavar='NF',
                         help='no. of filters (default: 32)')
     parser.add_argument('--gamma', type=float, default=0.1, metavar='M',
                         help='Learning rate step gamma (default: 0.1)')
@@ -88,6 +92,7 @@ def main():
     else:
         device = torch.device("cpu")
 
+    print(f'using device: {device}')
     train_kwargs = {'batch_size': args.batch_size}
     test_kwargs = {'batch_size': args.test_batch_size}
     if use_cuda:
@@ -98,9 +103,9 @@ def main():
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
 
-    data_dir = "data/"
-    train_files = glob.glob('**/*_batch_*', recursive=True)
-    test_files = glob.glob('**/*test_batch*', recursive=True)
+    data_dir = "../data/"
+    train_files = glob.glob(data_dir + '**/*_batch_*', recursive=True)
+    test_files = glob.glob(data_dir + '**/*test_batch*', recursive=True)
     train_files = list(map(unpickle, train_files))
     test_files = list(map(unpickle, test_files))
     test = combine_dicts(test_files)
@@ -115,17 +120,18 @@ def main():
     train_loader = torch.utils.data.DataLoader(trainset,**train_kwargs)
     test_loader = torch.utils.data.DataLoader(testset, **test_kwargs)
 
-    model = MODEL(3,args.nf).to(device)
+    model = RESNET9(3, args.nf, 10).to(device)
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
-    scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
+    scheduler = StepLR(optimizer, step_size=10, gamma=args.gamma)
     loss_criterion = nn.CrossEntropyLoss()
-    print_model_summary(model)
+    #print_model_summary(model)
 
     train_acc = []
     test_acc = []
     for epoch in range(1,args.epochs+1):
         train_acc.append(train_model(args, model, device, train_loader, loss_criterion, optimizer, epoch))
         test_acc.append(test_model(args, model, device, test_loader, loss_criterion))
+        scheduler.step()
         if (args.dry_run):
             break
     save_plot(train_acc, test_acc)
