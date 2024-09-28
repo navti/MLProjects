@@ -2,6 +2,37 @@ import torch
 from torch import nn
 from embeddings import InputEmbedding
 
+class LayerNorm(nn.Module):
+    def __init__(self, d_model):
+        super(LayerNorm, self).__init__()
+        self.beta = nn.Parameter(torch.ones(d_model))
+        self.gamma = nn.Parameter(torch.ones(d_model))
+        self.eps = 1e-5
+
+    def forward(self, x):
+        # mean across last dimension, the embedding dimension
+        mean = x.mean(-1, keepdim=True)
+        var = x.var(-1, keepdim=True)
+        z = (x - mean)/torch.sqrt(var + self.eps)
+        z = self.gamma * z + self.beta
+        return z
+
+class FeedForward(nn.Module):
+    def __init__(self, d_model, hidden, drop_prob=0.1):
+        super(FeedForward, self).__init__()
+        self.linear1 = nn.Linear(d_model, hidden)
+        self.linear2 = nn.Linear(hidden, hidden)
+        self.linear3 = nn.Linear(hidden, d_model)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=drop_prob)
+
+    def forward(self, x):
+        x = self.relu(self.linear1(x))
+        x = self.dropout(x)
+        x = self.relu(self.linear2(x))
+        x = self.dropout(x)
+        return self.linear3(x)
+
 class MultiHeadSelfAttention(nn.Module):
     def __init__(self, d_model, num_attn_heads):
         super(MultiHeadSelfAttention, self).__init__()
