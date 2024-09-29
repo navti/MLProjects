@@ -18,8 +18,10 @@ class LayerNorm(nn.Module):
         return z
 
 class FeedForward(nn.Module):
-    def __init__(self, d_model, hidden, drop_prob=0.1):
+    def __init__(self, d_model, hidden=None, drop_prob=0.1):
         super(FeedForward, self).__init__()
+        if hidden is None:
+            hidden = d_model // 2
         self.linear1 = nn.Linear(d_model, hidden)
         self.linear2 = nn.Linear(hidden, hidden)
         self.linear3 = nn.Linear(hidden, d_model)
@@ -39,11 +41,11 @@ class MultiHeadSelfAttention(nn.Module):
         self.linear = nn.Linear(d_model, d_model, bias=False)
         self.self_attn_heads = [SelfAttentionHead(d_model, num_attn_heads) for _ in range(num_attn_heads)]
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         # x token embeddings, batch_size x length x d_model
         out = []
         for self_attn_head in self.self_attn_heads:
-            out.append(self_attn_head(x))
+            out.append(self_attn_head(x, mask))
         z = torch.cat(out, dim=-1)
         return self.linear(z)
 
@@ -55,13 +57,13 @@ class SelfAttentionHead(nn.Module):
         self.qkv = nn.Linear(d_model, 3*self.head_dim, bias=False)
         self.dot_product = ScaledDotProductAttention()
     
-    def forward(self, x):
+    def forward(self, x, mask=None):
         # x token embeddings, batch_size x length x d_model
         qkv = self.qkv(x)
         q = qkv[:, :, :self.head_dim]
         k = qkv[:, :, self.head_dim:2*self.head_dim]
         v = qkv[:, :, 2*self.head_dim:]
-        z = self.dot_product(q, k, v)
+        z = self.dot_product(q, k, v, mask)
         return z
 
 class ScaledDotProductAttention(nn.Module):
@@ -73,7 +75,7 @@ class ScaledDotProductAttention(nn.Module):
     def forward(self, q, k, v, mask=None):
         # q,k,v are 3d tensors: batch, length, embedding dim
         # embedding dimension = d_model//attn_heads
-        _, _, dk = k.shape
+        _, seq_len, dk = k.shape
         # transpose along last two dimensions
         k_t = k.transpose(-2,-1)
         # scaled dot product
@@ -81,17 +83,28 @@ class ScaledDotProductAttention(nn.Module):
         attn_score = (q @ k_t) * scale
         # apply mask
         if mask is not None:
+            assert mask.dim() == 1 and mask.shape[0] == seq_len, f"mask should be a 1D 'seq length' long tensor."
             # fill maksed positions with low value so it becomes 0 in softmax
             attn_score = attn_score.masked_fill(mask == 0, -1000)
         attn_score = self.softmax(attn_score)
         # weigh values as per attention scores
         z = attn_score @ v
         return z
-    
+
+# test
 if __name__ == '__main__':
-    token_ids = torch.randint(0, 10, size=(2,5))
-    embedding = InputEmbedding(20, 10, d_model=128)
+    d_model = 128
+    num_attn_heads = 8
+    batch_size = 2
+    seq_len = 5
+    token_ids = torch.randint(0, 10, size=(batch_size, seq_len))
+    embedding = InputEmbedding(vocab_size=20, max_seq_len=10, d_model=d_model)
     token_emb = embedding(token_ids)
-    multi_head = MultiHeadSelfAttention(d_model=128, num_attn_heads=8)
-    z = multi_head(token_emb)
-    print("end")
+    multi_head = MultiHeadSelfAttention(d_model, num_attn_heads)
+    mask = torch.tensor([1,1,1,0,0])
+    z = multi_head(token_emb, mask)
+    layer_norm = LayerNorm(d_model)
+    z = layer_norm(z)
+    ff = FeedForward(d_model, 64)
+    z = ff(z)
+    print(f"out shape: {z.shape}")
