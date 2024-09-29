@@ -41,11 +41,11 @@ class MultiHeadSelfAttention(nn.Module):
         self.linear = nn.Linear(d_model, d_model, bias=False)
         self.self_attn_heads = [SelfAttentionHead(d_model, num_attn_heads) for _ in range(num_attn_heads)]
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, cross_attn=False, enc=None):
         # x token embeddings, batch_size x length x d_model
         out = []
         for self_attn_head in self.self_attn_heads:
-            out.append(self_attn_head(x, mask))
+            out.append(self_attn_head(x, mask, cross_attn, enc))
         z = torch.cat(out, dim=-1)
         return self.linear(z)
 
@@ -57,12 +57,18 @@ class SelfAttentionHead(nn.Module):
         self.qkv = nn.Linear(d_model, 3*self.head_dim, bias=False)
         self.dot_product = ScaledDotProductAttention()
     
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, cross_attn=False, enc=None):
         # x token embeddings, batch_size x length x d_model
-        qkv = self.qkv(x)
-        q = qkv[:, :, :self.head_dim]
-        k = qkv[:, :, self.head_dim:2*self.head_dim]
-        v = qkv[:, :, 2*self.head_dim:]
+        self_qkv = self.qkv(x)
+        q = self_qkv[:, :, :self.head_dim]
+        k = self_qkv[:, :, self.head_dim:2*self.head_dim]
+        v = self_qkv[:, :, 2*self.head_dim:]
+        # cross attention used in decoder
+        if cross_attn:
+            assert enc is not None, "enc input needed for encoder decoder cross attention"
+            cross_qkv = self.qkv(enc)
+            k = cross_qkv[:, :, self.head_dim:2*self.head_dim]
+            v = cross_qkv[:, :, 2*self.head_dim:]
         z = self.dot_product(q, k, v, mask)
         return z
 
