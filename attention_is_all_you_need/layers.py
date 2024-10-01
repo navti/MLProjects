@@ -39,7 +39,7 @@ class MultiHeadSelfAttention(nn.Module):
     def __init__(self, d_model, num_attn_heads):
         super(MultiHeadSelfAttention, self).__init__()
         self.linear = nn.Linear(d_model, d_model, bias=False)
-        self.self_attn_heads = [SelfAttentionHead(d_model, num_attn_heads) for _ in range(num_attn_heads)]
+        self.self_attn_heads = nn.ModuleList([SelfAttentionHead(d_model, num_attn_heads) for _ in range(num_attn_heads)])
 
     def forward(self, x, mask=None, cross_attn=False, enc=None):
         # x token embeddings, batch_size x length x d_model
