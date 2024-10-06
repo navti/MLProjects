@@ -4,12 +4,28 @@ from blocks import *
 from torchinfo import summary
 
 class TransformerEncoder(nn.Module):
+    """
+    Transformer encoder class containing encoder blocks of the transformer
+    :param num_blocks: type int, no. of encoder blocks in transformer
+    :param d_model: type int, embedding dimension of the model
+    :param num_attn_heads: type int, no. of self attention heads inside the multi head layer
+    :param vocab_size: type int, no. of rows in the embedding table, size of vocabulary.
+    :param max_seq_len: type int, max sequence length allowed, used by positional encoding layer
+    :param pad_idx: type int, the padding token id
+    """
     def __init__(self, num_blocks, d_model, num_attn_heads, vocab_size, max_seq_len, pad_idx=None):
         super(TransformerEncoder, self).__init__()
         self.input_embedding = InputEmbedding(vocab_size, max_seq_len, d_model, pad_idx)
         self.enc_blocks = nn.ModuleList([EncoderBlock(d_model, num_attn_heads) for _ in range(num_blocks)])
 
     def forward(self, token_ids, mask=None):
+        """
+        forward method of transformer encoder
+        :param token_ids: type tensor[int], size: batch, max_seq_len, input token ids padded to max_seq_len
+        :param mask: type tensor[int], size: max_seq_len, attention mask
+        :return:
+            out: type tensor, size: batch, max_seq_len, d_model
+        """
         token_embeddings = self.input_embedding(token_ids)
         out = self.enc_blocks[0](token_embeddings, mask)
         for enc_block in self.enc_blocks[1:]:
@@ -17,12 +33,29 @@ class TransformerEncoder(nn.Module):
         return out
 
 class TransformerDecoder(nn.Module):
+    """
+    Transformer decoder class containing decoder blocks of the transformer
+    :param num_blocks: type int, no. of encoder blocks in transformer
+    :param d_model: type int, embedding dimension of the model
+    :param num_attn_heads: type int, no. of self attention heads inside the multi head layer
+    :param vocab_size: type int, no. of rows in the embedding table, size of vocabulary.
+    :param max_seq_len: type int, max sequence length allowed, used by positional encoding layer
+    :param pad_idx: type int, the padding token id
+    """
     def __init__(self, num_blocks, d_model, num_attn_heads, vocab_size, max_seq_len, pad_idx=None):
         super(TransformerDecoder, self).__init__()
         self.input_embedding = InputEmbedding(vocab_size, max_seq_len, d_model, pad_idx)
         self.dec_blocks = nn.ModuleList([DecoderBlock(d_model, num_attn_heads) for _ in range(num_blocks)])
 
     def forward(self, token_ids, enc_out, mask=None):
+        """
+        forward method of transformer encoder
+        :param token_ids: type tensor[int], size: batch, max_seq_len, input token ids padded to max_seq_len
+        :param enc_out: type tensor, size: batch, max_seq_len, d_model
+        :param mask: type tensor[int], size: max_seq_len, attention mask
+        :return:
+            out: type tensor, size: batch, max_seq_len, d_model
+        """
         token_embeddings = self.input_embedding(token_ids)
         out = self.dec_blocks[0](token_embeddings, enc_out, mask)
         for dec_block in self.dec_blocks[1:]:
@@ -30,6 +63,16 @@ class TransformerDecoder(nn.Module):
         return out
 
 class Transformer(nn.Module):
+    """
+    Transformer encoder class containing encoder blocks of the transformer
+    :param num_enc: type int, no. of encoder blocks in transformer
+    :param num_dec: type int, no. of decoder blocks in transformer
+    :param d_model: type int, embedding dimension of the model
+    :param num_attn_heads: type int, no. of self attention heads inside the multi head layer
+    :param vocab_size: type int, no. of rows in the embedding table, size of vocabulary.
+    :param max_seq_len: type int, max sequence length allowed, used by positional encoding layer
+    :param pad_idx: type int, the padding token id
+    """
     def __init__(self, *args, **kwargs):
         super(Transformer, self).__init__()
         self.num_enc = kwargs.get('num_enc') if 'num_enc' in kwargs else args[0]
@@ -44,6 +87,15 @@ class Transformer(nn.Module):
         self.decoder = TransformerDecoder(self.num_dec, self.d_model, self.num_attn_heads, self.vocab_size, self.max_seq_len, self.pad_idx)
 
     def forward(self, enc_token_ids, dec_token_ids, enc_mask=None, dec_mask=None):
+        """
+        forward method of transformer encoder
+        :param enc_token_ids: type tensor[int], size: batch, max_seq_len, encoder input token ids padded to max_seq_len
+        :param dec_token_ids: type tensor[int], size: batch, max_seq_len, decoder input token ids padded to max_seq_len
+        :param enc_mask: type tensor[int], size: max_seq_len, attention mask for encoder
+        :param dec_mask: type tensor[int], size: max_seq_len, attention mask for decoder
+        :return:
+            dec_out: type tensor, size: batch, max_seq_len, d_model
+        """
         enc_out = self.encoder(enc_token_ids, enc_mask)
         dec_out = self.decoder(dec_token_ids, enc_out, dec_mask)
         return dec_out

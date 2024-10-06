@@ -3,8 +3,15 @@ from torch import nn
 from embeddings import InputEmbedding
 
 class LayerNorm(nn.Module):
+    """
+    Layer normalization
+    mean and variance are calculated per token but the learnable params are per
+    embedding dimension.
+    :param d_model: embedding dimension of the model
+    """
     def __init__(self, d_model):
         super(LayerNorm, self).__init__()
+        # beta and gamma are learnable parameters for layer norm
         self.beta = nn.Parameter(torch.ones(d_model))
         self.gamma = nn.Parameter(torch.ones(d_model))
         self.eps = 1e-5
@@ -12,12 +19,19 @@ class LayerNorm(nn.Module):
     def forward(self, x):
         # mean across last dimension, the embedding dimension
         mean = x.mean(-1, keepdim=True)
+        # variance across last dimension
         var = x.var(-1, keepdim=True)
         z = (x - mean)/torch.sqrt(var + self.eps)
         z = self.gamma * z + self.beta
         return z
 
 class FeedForward(nn.Module):
+    """
+    feed forward layer, stack of linear layers
+    :param d_model: type int, embedding dimension
+    :param hidden: type int, hidden dimension
+    :param drop_prob: type float, dropout probability
+    """
     def __init__(self, d_model, hidden=None, drop_prob=0.1):
         super(FeedForward, self).__init__()
         if hidden is None:
@@ -25,6 +39,7 @@ class FeedForward(nn.Module):
         self.linear1 = nn.Linear(d_model, hidden)
         self.linear2 = nn.Linear(hidden, hidden)
         self.linear3 = nn.Linear(hidden, d_model)
+        # use ReLU activation
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(p=drop_prob)
 
@@ -36,20 +51,40 @@ class FeedForward(nn.Module):
         return self.linear3(x)
 
 class MultiHeadSelfAttention(nn.Module):
+    """
+    multi head self attention for encoder/decoder
+    :param d_model: type int, token embedding dimension
+    :param num_attn_heads: type int, no. of attention heads
+    """
     def __init__(self, d_model, num_attn_heads):
         super(MultiHeadSelfAttention, self).__init__()
         self.linear = nn.Linear(d_model, d_model, bias=False)
         self.self_attn_heads = nn.ModuleList([SelfAttentionHead(d_model, num_attn_heads) for _ in range(num_attn_heads)])
 
     def forward(self, x, mask=None, cross_attn=False, enc=None):
+        """
+        multi head attention call
+        :param x: type tensor, token embeddings
+        :param mask: attention mask
+        :param cross_attn: type bool, if cross attention should be used, applicable for decoder
+        :param enc: type tensor, output from encoder, used by decoder for cross attention
+        :return:
+            out: type tensor, concatenated outputs from attention heads
+        """
         # x token embeddings, batch_size x length x d_model
         out = []
         for self_attn_head in self.self_attn_heads:
             out.append(self_attn_head(x, mask, cross_attn, enc))
+        # concatenate self attn head outputs
         z = torch.cat(out, dim=-1)
         return self.linear(z)
 
 class SelfAttentionHead(nn.Module):
+    """
+    self attention for encoder/decoder
+    :param d_model: type int, token embedding dimension
+    :param num_attn_heads: type int, no. of attention heads
+    """
     def __init__(self, d_model, num_attn_heads):
         super(SelfAttentionHead, self).__init__()
         self.head_dim = d_model//num_attn_heads
@@ -58,6 +93,15 @@ class SelfAttentionHead(nn.Module):
         self.dot_product = ScaledDotProductAttention()
     
     def forward(self, x, mask=None, cross_attn=False, enc=None):
+        """
+        self attention call
+        :param x: type tensor, token embeddings
+        :param mask: attention mask
+        :param cross_attn: type bool, if cross attention should be used, applicable for decoder
+        :param enc: type tensor, output from encoder, used by decoder for cross attention
+        :return:
+            out: type tensor, scaled dot product
+        """
         # x token embeddings, batch_size x length x d_model
         self_qkv = self.qkv(x)
         q = self_qkv[:, :, :self.head_dim]
@@ -67,18 +111,29 @@ class SelfAttentionHead(nn.Module):
         if cross_attn:
             assert enc is not None, "enc input needed for encoder decoder cross attention"
             cross_qkv = self.qkv(enc)
+            # use keys and values from encoder output
             k = cross_qkv[:, :, self.head_dim:2*self.head_dim]
             v = cross_qkv[:, :, 2*self.head_dim:]
         z = self.dot_product(q, k, v, mask)
         return z
 
 class ScaledDotProductAttention(nn.Module):
+    """ Scaled dot product for self attention """
     def __init__(self):
         super(ScaledDotProductAttention, self).__init__()
         # softmax along last dimension
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, q, k, v, mask=None):
+        """
+        scaled dot product forward method
+        :param q: type tensor, query embeddings
+        :param k: type tensor, key embeddings
+        :param v: type tensor, value embeddings
+        :param mask: attention mask
+        :return:
+            z: attn score weighted sum of values
+        """
         # q,k,v are 3d tensors: batch, length, embedding dim
         # embedding dimension = d_model//attn_heads
         _, seq_len, dk = k.shape

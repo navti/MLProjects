@@ -2,13 +2,21 @@ import torch
 from torch import nn
 
 class TokenEmbedding(nn.Embedding):
+    """
+    Create token embeddings from input token ids
+    :param vocab_size: type int, unique no. of tokens in vocabulary
+    :param d_model: type int, embedding dimension
+    :param pad_idx: type int, pad token id
+    """
     def __init__(self, vocab_size, d_model, pad_idx=None):
         super(TokenEmbedding, self).__init__(vocab_size, d_model, padding_idx=pad_idx)
-
 
 class PositionalEncoding(nn.Module):
     """
     Positional encoding for tokens, dimension same as d_model so it can be added to token embeddings
+    :param max_seq_len: type int, max sequence length of input allowed
+    :param d_model: type int, embedding dimension for tokens
+    :param device: device to use when storing these encodings
     """
     def __init__(self, max_seq_len, d_model, device='cpu'):
         super(PositionalEncoding, self).__init__()
@@ -29,12 +37,26 @@ class PositionalEncoding(nn.Module):
         self.pos_encoding[:,1::2] = torch.cos(pos / (10000 ** (exp[:stop] / d_model)))
 
     def forward(self, x):
+        """
+        forward method to calculate encodings
+        :param x: type tensor[int], input token ids already padded to max seq len
+        :return:
+            encoding: size: batch, max_seq_len, d_model
+        """
         # x: inut token ids, size: batch_size x seq_len
         batch_size, seq_len = x.shape
         return self.pos_encoding[:seq_len]
 
 class InputEmbedding(nn.Module):
-    def __init__(self, vocab_size, max_seq_len, d_model=128, pad_idx=None, device='cpu'):
+    """
+    Create embeddings from input token ids
+    :param vocab_size: type int, unique no. of tokens in vocabulary
+    :param max_seq_len: type int, max tokens in one input
+    :param d_model: type int, embedding dimension
+    :param pad_idx: type int, pad token id
+    :param device: device to use for storing embeddings
+    """
+    def __init__(self, vocab_size, max_seq_len, d_model, pad_idx=None, device='cpu'):
         super(InputEmbedding, self).__init__()
         self.vocab_size = vocab_size
         self.d_model = d_model
@@ -44,6 +66,13 @@ class InputEmbedding(nn.Module):
         self.pos_encoding = PositionalEncoding(self.max_seq_len, self.d_model, device=device)
 
     def forward(self, x):
+        """
+        forward method to get embeddings
+        :param x: token ids
+        :return:
+            embeddings: size: batch, max_seq_len, d_model
+        """
+        # get token embeddings, position encodings, return sum
         return self.token_embedding(x) + self.pos_encoding(x)
 
 if __name__ == '__main__':

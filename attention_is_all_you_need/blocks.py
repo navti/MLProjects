@@ -2,8 +2,12 @@ import torch
 from torch import nn
 from layers import *
 
-
 class EncoderBlock(nn.Module):
+    """
+    Encoder block
+    :param d_model: type int, token embedding dimension
+    :param num_attn_heads: type int, no. of attention heads
+    """
     def __init__(self, d_model, num_attn_heads):
         super(EncoderBlock, self).__init__()
         self.multi_head_attn = MultiHeadSelfAttention(d_model, num_attn_heads)
@@ -12,6 +16,11 @@ class EncoderBlock(nn.Module):
         self.ff = FeedForward(d_model)
 
     def forward(self, x, mask=None):
+        """
+        call encoder block
+        :param x: type tensor, token embeddings
+        :param mask: attention mask
+        """
         multihead_out = self.multi_head_attn(x, mask)
         addnorm_out1 = self.layer_norm1(x + multihead_out)
         ff_out = self.ff(addnorm_out1)
@@ -19,6 +28,11 @@ class EncoderBlock(nn.Module):
         return addnorm_out2
 
 class DecoderBlock(nn.Module):
+    """
+    Decoder block
+    :param d_model: type int, token embedding dimension
+    :param num_attn_heads: type int, no. of attention heads
+    """
     def __init__(self, d_model, num_attn_heads):
         super(DecoderBlock, self).__init__()
         self.multi_head_attn1 = MultiHeadSelfAttention(d_model, num_attn_heads)
@@ -29,6 +43,12 @@ class DecoderBlock(nn.Module):
         self.ff = FeedForward(d_model)
 
     def forward(self, x, enc=None, mask=None):
+        """
+        call decoder block
+        :param x: type tensor, token embeddings
+        :param enc: type tensor, encoder output to use for cross attention
+        :param mask: attention mask
+        """
         # multihead attn and add and norm 1
         multihead_out1 = self.multi_head_attn1(x, mask)
         addnorm_out1 = self.layer_norm1(x + multihead_out1)
