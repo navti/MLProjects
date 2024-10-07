@@ -8,15 +8,18 @@ class LayerNorm(nn.Module):
     mean and variance are calculated per token but the learnable params are per
     embedding dimension.
     :param d_model: embedding dimension of the model
+    :param device: device to be used (cpu/cuda)
     """
-    def __init__(self, d_model):
+    def __init__(self, d_model, device='cpu'):
         super(LayerNorm, self).__init__()
+        self.device = device
         # beta and gamma are learnable parameters for layer norm
-        self.beta = nn.Parameter(torch.ones(d_model))
-        self.gamma = nn.Parameter(torch.ones(d_model))
+        self.beta = nn.Parameter(torch.ones(d_model)).to(device)
+        self.gamma = nn.Parameter(torch.ones(d_model)).to(device)
         self.eps = 1e-5
 
     def forward(self, x):
+        x = x.to(self.device)
         # mean across last dimension, the embedding dimension
         mean = x.mean(-1, keepdim=True)
         # variance across last dimension
@@ -31,19 +34,22 @@ class FeedForward(nn.Module):
     :param d_model: type int, embedding dimension
     :param hidden: type int, hidden dimension
     :param drop_prob: type float, dropout probability
+    :param device: device to be used (cpu/cuda)
     """
-    def __init__(self, d_model, hidden=None, drop_prob=0.1):
+    def __init__(self, d_model, hidden=None, drop_prob=0.1, device='cpu'):
         super(FeedForward, self).__init__()
+        self.device = device
         if hidden is None:
             hidden = d_model // 2
-        self.linear1 = nn.Linear(d_model, hidden)
-        self.linear2 = nn.Linear(hidden, hidden)
-        self.linear3 = nn.Linear(hidden, d_model)
+        self.linear1 = nn.Linear(d_model, hidden).to(device)
+        self.linear2 = nn.Linear(hidden, hidden).to(device)
+        self.linear3 = nn.Linear(hidden, d_model).to(device)
         # use ReLU activation
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(p=drop_prob)
+        self.relu = nn.ReLU().to(device)
+        self.dropout = nn.Dropout(p=drop_prob).to(device)
 
     def forward(self, x):
+        x = x.to(self.device)
         x = self.relu(self.linear1(x))
         x = self.dropout(x)
         x = self.relu(self.linear2(x))
@@ -55,11 +61,13 @@ class MultiHeadSelfAttention(nn.Module):
     multi head self attention for encoder/decoder
     :param d_model: type int, token embedding dimension
     :param num_attn_heads: type int, no. of attention heads
+    :param device: device to be used (cpu/cuda)
     """
-    def __init__(self, d_model, num_attn_heads):
+    def __init__(self, d_model, num_attn_heads, device='cpu'):
         super(MultiHeadSelfAttention, self).__init__()
-        self.linear = nn.Linear(d_model, d_model, bias=False)
-        self.self_attn_heads = nn.ModuleList([SelfAttentionHead(d_model, num_attn_heads) for _ in range(num_attn_heads)])
+        self.device = device
+        self.linear = nn.Linear(d_model, d_model, bias=False).to(device)
+        self.self_attn_heads = nn.ModuleList([SelfAttentionHead(d_model, num_attn_heads, device) for _ in range(num_attn_heads)])
 
     def forward(self, x, mask=None, cross_attn=False, enc=None):
         """
@@ -76,7 +84,7 @@ class MultiHeadSelfAttention(nn.Module):
         for self_attn_head in self.self_attn_heads:
             out.append(self_attn_head(x, mask, cross_attn, enc))
         # concatenate self attn head outputs
-        z = torch.cat(out, dim=-1)
+        z = torch.cat(out, dim=-1).to(self.device)
         return self.linear(z)
 
 class SelfAttentionHead(nn.Module):
@@ -84,13 +92,15 @@ class SelfAttentionHead(nn.Module):
     self attention for encoder/decoder
     :param d_model: type int, token embedding dimension
     :param num_attn_heads: type int, no. of attention heads
+    :param device: device to be used (cpu/cuda)
     """
-    def __init__(self, d_model, num_attn_heads):
+    def __init__(self, d_model, num_attn_heads, device='cpu'):
         super(SelfAttentionHead, self).__init__()
+        self.device = device
         self.head_dim = d_model//num_attn_heads
         assert self.head_dim * num_attn_heads == d_model, "model dimension not a multiple of attn head dimension."
-        self.qkv = nn.Linear(d_model, 3*self.head_dim, bias=False)
-        self.dot_product = ScaledDotProductAttention()
+        self.qkv = nn.Linear(d_model, 3*self.head_dim, bias=False).to(device)
+        self.dot_product = ScaledDotProductAttention(device=device)
     
     def forward(self, x, mask=None, cross_attn=False, enc=None):
         """
@@ -102,6 +112,7 @@ class SelfAttentionHead(nn.Module):
         :return:
             out: type tensor, scaled dot product
         """
+        x = x.to(self.device)
         # x token embeddings, batch_size x length x d_model
         self_qkv = self.qkv(x)
         q = self_qkv[:, :, :self.head_dim]
@@ -110,6 +121,7 @@ class SelfAttentionHead(nn.Module):
         # cross attention used in decoder
         if cross_attn:
             assert enc is not None, "enc input needed for encoder decoder cross attention"
+            enc = enc.to(self.device)
             cross_qkv = self.qkv(enc)
             # use keys and values from encoder output
             k = cross_qkv[:, :, self.head_dim:2*self.head_dim]
@@ -118,11 +130,15 @@ class SelfAttentionHead(nn.Module):
         return z
 
 class ScaledDotProductAttention(nn.Module):
-    """ Scaled dot product for self attention """
-    def __init__(self):
+    """
+    Scaled dot product for self attention
+    :param device: device to be used (cpu/cuda)
+    """
+    def __init__(self, device='cpu'):
         super(ScaledDotProductAttention, self).__init__()
+        self.device = device
         # softmax along last dimension
-        self.softmax = nn.Softmax(dim=-1)
+        self.softmax = nn.Softmax(dim=-1).to(device)
 
     def forward(self, q, k, v, mask=None):
         """
@@ -134,16 +150,20 @@ class ScaledDotProductAttention(nn.Module):
         :return:
             z: attn score weighted sum of values
         """
+        q = q.to(self.device)
+        k = k.to(self.device)
+        v = v.to(self.device)
         # q,k,v are 3d tensors: batch, length, embedding dim
         # embedding dimension = d_model//attn_heads
         _, seq_len, dk = k.shape
         # transpose along last two dimensions
         k_t = k.transpose(-2,-1)
         # scaled dot product
-        scale = 1/torch.tensor([dk])
+        scale = 1/torch.tensor([dk], device=self.device)
         attn_score = (q @ k_t) * scale
         # apply mask
         if mask is not None:
+            mask = mask.to(self.device)
             assert mask.dim() == 1 and mask.shape[0] == seq_len, f"mask should be a 1D 'seq length' long tensor."
             # fill maksed positions with low value so it becomes 0 in softmax
             attn_score = attn_score.masked_fill(mask == 0, -1000)
@@ -158,14 +178,15 @@ if __name__ == '__main__':
     num_attn_heads = 8
     batch_size = 2
     seq_len = 5
-    token_ids = torch.randint(0, 10, size=(batch_size, seq_len))
-    embedding = InputEmbedding(vocab_size=20, max_seq_len=10, d_model=d_model)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    token_ids = torch.randint(0, 10, size=(batch_size, seq_len)).to(device)
+    embedding = InputEmbedding(vocab_size=20, max_seq_len=10, d_model=d_model, device=device)
     token_emb = embedding(token_ids)
-    multi_head = MultiHeadSelfAttention(d_model, num_attn_heads)
-    mask = torch.tensor([1,1,1,0,0])
+    multi_head = MultiHeadSelfAttention(d_model, num_attn_heads, device=device)
+    mask = torch.tensor([1,1,1,0,0]).to(device)
     z = multi_head(token_emb, mask)
-    layer_norm = LayerNorm(d_model)
+    layer_norm = LayerNorm(d_model, device=device)
     z = layer_norm(z)
-    ff = FeedForward(d_model, 64)
+    ff = FeedForward(d_model, 64, device=device)
     z = ff(z)
     print(f"out shape: {z.shape}")

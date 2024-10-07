@@ -7,13 +7,15 @@ class EncoderBlock(nn.Module):
     Encoder block
     :param d_model: type int, token embedding dimension
     :param num_attn_heads: type int, no. of attention heads
+    :param device: device to be used (cpu/cuda)
     """
-    def __init__(self, d_model, num_attn_heads):
+    def __init__(self, d_model, num_attn_heads, device='cpu'):
         super(EncoderBlock, self).__init__()
-        self.multi_head_attn = MultiHeadSelfAttention(d_model, num_attn_heads)
-        self.layer_norm1 = LayerNorm(d_model)
-        self.layer_norm2 = LayerNorm(d_model)
-        self.ff = FeedForward(d_model)
+        self.device = device
+        self.multi_head_attn = MultiHeadSelfAttention(d_model, num_attn_heads, device)
+        self.layer_norm1 = LayerNorm(d_model, device)
+        self.layer_norm2 = LayerNorm(d_model, device)
+        self.ff = FeedForward(d_model, device=device)
 
     def forward(self, x, mask=None):
         """
@@ -21,6 +23,7 @@ class EncoderBlock(nn.Module):
         :param x: type tensor, token embeddings
         :param mask: attention mask
         """
+        x = x.to(self.device)
         multihead_out = self.multi_head_attn(x, mask)
         addnorm_out1 = self.layer_norm1(x + multihead_out)
         ff_out = self.ff(addnorm_out1)
@@ -32,15 +35,17 @@ class DecoderBlock(nn.Module):
     Decoder block
     :param d_model: type int, token embedding dimension
     :param num_attn_heads: type int, no. of attention heads
+    :param device: device to be used (cpu/cuda)
     """
-    def __init__(self, d_model, num_attn_heads):
+    def __init__(self, d_model, num_attn_heads, device='cpu'):
         super(DecoderBlock, self).__init__()
-        self.multi_head_attn1 = MultiHeadSelfAttention(d_model, num_attn_heads)
-        self.multi_head_attn2 = MultiHeadSelfAttention(d_model, num_attn_heads)
-        self.layer_norm1 = LayerNorm(d_model)
-        self.layer_norm2 = LayerNorm(d_model)
-        self.layer_norm3 = LayerNorm(d_model)
-        self.ff = FeedForward(d_model)
+        self.device = device
+        self.multi_head_attn1 = MultiHeadSelfAttention(d_model, num_attn_heads, device)
+        self.multi_head_attn2 = MultiHeadSelfAttention(d_model, num_attn_heads, device)
+        self.layer_norm1 = LayerNorm(d_model, device)
+        self.layer_norm2 = LayerNorm(d_model, device)
+        self.layer_norm3 = LayerNorm(d_model, device)
+        self.ff = FeedForward(d_model, device=device)
 
     def forward(self, x, enc=None, mask=None):
         """
@@ -49,6 +54,7 @@ class DecoderBlock(nn.Module):
         :param enc: type tensor, encoder output to use for cross attention
         :param mask: attention mask
         """
+        x = x.to(self.device)
         # multihead attn and add and norm 1
         multihead_out1 = self.multi_head_attn1(x, mask)
         addnorm_out1 = self.layer_norm1(x + multihead_out1)
@@ -66,11 +72,12 @@ if __name__ == '__main__':
     num_attn_heads = 8
     batch_size = 2
     seq_len = 5
-    token_ids = torch.randint(0, 10, size=(batch_size, seq_len))
-    embedding = InputEmbedding(vocab_size=20, max_seq_len=10, d_model=d_model)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    token_ids = torch.randint(0, 10, size=(batch_size, seq_len)).to(device)
+    embedding = InputEmbedding(vocab_size=20, max_seq_len=10, d_model=d_model, device=device)
     token_emb = embedding(token_ids)
-    encoder = EncoderBlock(d_model, num_attn_heads)
+    encoder = EncoderBlock(d_model, num_attn_heads, device=device)
     enc_out = encoder(token_emb)
-    decoder = DecoderBlock(d_model, num_attn_heads)
+    decoder = DecoderBlock(d_model, num_attn_heads, device=device)
     dec_out = decoder(token_emb, enc_out)
     print(f"out shape: {dec_out.shape}")

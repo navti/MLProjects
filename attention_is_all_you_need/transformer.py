@@ -12,11 +12,13 @@ class TransformerEncoder(nn.Module):
     :param vocab_size: type int, no. of rows in the embedding table, size of vocabulary.
     :param max_seq_len: type int, max sequence length allowed, used by positional encoding layer
     :param pad_idx: type int, the padding token id
+    :param device: device to be used (cpu/cuda)
     """
-    def __init__(self, num_blocks, d_model, num_attn_heads, vocab_size, max_seq_len, pad_idx=None):
+    def __init__(self, num_blocks, d_model, num_attn_heads, vocab_size, max_seq_len, pad_idx=None, device='cpu'):
         super(TransformerEncoder, self).__init__()
-        self.input_embedding = InputEmbedding(vocab_size, max_seq_len, d_model, pad_idx)
-        self.enc_blocks = nn.ModuleList([EncoderBlock(d_model, num_attn_heads) for _ in range(num_blocks)])
+        self.device = device
+        self.input_embedding = InputEmbedding(vocab_size, max_seq_len, d_model, pad_idx, device=device)
+        self.enc_blocks = nn.ModuleList([EncoderBlock(d_model, num_attn_heads, device=device) for _ in range(num_blocks)])
 
     def forward(self, token_ids, mask=None):
         """
@@ -26,6 +28,7 @@ class TransformerEncoder(nn.Module):
         :return:
             out: type tensor, size: batch, max_seq_len, d_model
         """
+        token_ids = token_ids.to(self.device)
         token_embeddings = self.input_embedding(token_ids)
         out = self.enc_blocks[0](token_embeddings, mask)
         for enc_block in self.enc_blocks[1:]:
@@ -41,11 +44,13 @@ class TransformerDecoder(nn.Module):
     :param vocab_size: type int, no. of rows in the embedding table, size of vocabulary.
     :param max_seq_len: type int, max sequence length allowed, used by positional encoding layer
     :param pad_idx: type int, the padding token id
+    :param device: device to be used (cpu/cuda)
     """
-    def __init__(self, num_blocks, d_model, num_attn_heads, vocab_size, max_seq_len, pad_idx=None):
+    def __init__(self, num_blocks, d_model, num_attn_heads, vocab_size, max_seq_len, pad_idx=None, device='cpu'):
         super(TransformerDecoder, self).__init__()
-        self.input_embedding = InputEmbedding(vocab_size, max_seq_len, d_model, pad_idx)
-        self.dec_blocks = nn.ModuleList([DecoderBlock(d_model, num_attn_heads) for _ in range(num_blocks)])
+        self.device = device
+        self.input_embedding = InputEmbedding(vocab_size, max_seq_len, d_model, pad_idx, device=device)
+        self.dec_blocks = nn.ModuleList([DecoderBlock(d_model, num_attn_heads, device=device) for _ in range(num_blocks)])
 
     def forward(self, token_ids, enc_out, mask=None):
         """
@@ -56,6 +61,7 @@ class TransformerDecoder(nn.Module):
         :return:
             out: type tensor, size: batch, max_seq_len, d_model
         """
+        token_ids = token_ids.to(self.device)
         token_embeddings = self.input_embedding(token_ids)
         out = self.dec_blocks[0](token_embeddings, enc_out, mask)
         for dec_block in self.dec_blocks[1:]:
@@ -72,6 +78,7 @@ class Transformer(nn.Module):
     :param vocab_size: type int, no. of rows in the embedding table, size of vocabulary.
     :param max_seq_len: type int, max sequence length allowed, used by positional encoding layer
     :param pad_idx: type int, the padding token id
+    :param device: device to be used (cpu/cuda)
     """
     def __init__(self, *args, **kwargs):
         super(Transformer, self).__init__()
@@ -81,10 +88,11 @@ class Transformer(nn.Module):
         self.num_attn_heads = kwargs.get('num_attn_heads') if 'num_attn_heads' in kwargs else args[3]
         self.vocab_size = kwargs.get('vocab_size') if 'vocab_size' in kwargs else args[4]
         self.max_seq_len = kwargs.get('max_seq_len') if 'max_seq_len' in kwargs else args[5]
-        self.pad_idx = kwargs.get('pad_idx') if 'pad_idx' in kwargs else args[6] if len(args) == 7 else None
+        self.pad_idx = kwargs.get('pad_idx') if 'pad_idx' in kwargs else args[6] if len(args) >= 7 else None
+        self.device = kwargs.get('device') if 'device' in kwargs else args[7] if len(args) == 8 else 'cpu'
 
-        self.encoder = TransformerEncoder(self.num_enc, self.d_model, self.num_attn_heads, self.vocab_size, self.max_seq_len, self.pad_idx)
-        self.decoder = TransformerDecoder(self.num_dec, self.d_model, self.num_attn_heads, self.vocab_size, self.max_seq_len, self.pad_idx)
+        self.encoder = TransformerEncoder(self.num_enc, self.d_model, self.num_attn_heads, self.vocab_size, self.max_seq_len, self.pad_idx, device=self.device)
+        self.decoder = TransformerDecoder(self.num_dec, self.d_model, self.num_attn_heads, self.vocab_size, self.max_seq_len, self.pad_idx, device=self.device)
 
     def forward(self, enc_token_ids, dec_token_ids, enc_mask=None, dec_mask=None):
         """
@@ -108,9 +116,10 @@ if __name__ == "__main__":
     num_attn_heads = 8
     batch_size = 2
     seq_len = 5
-    token_ids = torch.randint(0, 10, size=(batch_size, seq_len))
-    mask = torch.tensor([1,1,1,0,0])
-    tr = Transformer(num_enc, num_dec, d_model, num_attn_heads, vocab_size=20, max_seq_len=10)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    token_ids = torch.randint(0, 10, size=(batch_size, seq_len)).to(device)
+    mask = torch.tensor([1,1,1,0,0]).to(device)
+    tr = Transformer(num_enc, num_dec, d_model, num_attn_heads, vocab_size=20, max_seq_len=10, device=device)
     out = tr(token_ids, token_ids, None, mask)
     summary(tr)
     print(out.shape)

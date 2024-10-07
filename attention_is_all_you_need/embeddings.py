@@ -17,6 +17,7 @@ class PositionalEncoding(nn.Module):
     :param max_seq_len: type int, max sequence length of input allowed
     :param d_model: type int, embedding dimension for tokens
     :param device: device to use when storing these encodings
+    :param device: device to be used (cpu/cuda)
     """
     def __init__(self, max_seq_len, d_model, device='cpu'):
         super(PositionalEncoding, self).__init__()
@@ -55,6 +56,7 @@ class InputEmbedding(nn.Module):
     :param d_model: type int, embedding dimension
     :param pad_idx: type int, pad token id
     :param device: device to use for storing embeddings
+    :param device: device to be used (cpu/cuda)
     """
     def __init__(self, vocab_size, max_seq_len, d_model, pad_idx=None, device='cpu'):
         super(InputEmbedding, self).__init__()
@@ -62,8 +64,8 @@ class InputEmbedding(nn.Module):
         self.d_model = d_model
         self.pad_idx = pad_idx
         self.max_seq_len = max_seq_len
-        self.token_embedding = TokenEmbedding(self.vocab_size, self.d_model, self.pad_idx)
-        self.pos_encoding = PositionalEncoding(self.max_seq_len, self.d_model, device=device)
+        self.token_embedding = TokenEmbedding(self.vocab_size, self.d_model, self.pad_idx).to(device)
+        self.pos_encoding = PositionalEncoding(self.max_seq_len, self.d_model, device=device).to(device)
 
     def forward(self, x):
         """
@@ -76,6 +78,7 @@ class InputEmbedding(nn.Module):
         return self.token_embedding(x) + self.pos_encoding(x)
 
 if __name__ == '__main__':
-    token_ids = torch.randint(0, 10, size=(2,5))
-    embedding = InputEmbedding(20, 10, d_model=5)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    token_ids = torch.randint(0, 10, size=(2,5)).to(device)
+    embedding = InputEmbedding(20, 10, d_model=5, device=device)
     print(embedding(token_ids))
