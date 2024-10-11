@@ -2,8 +2,9 @@ import pandas as pd
 from collections import defaultdict
 from tqdm import tqdm
 from copy import deepcopy
+import pickle
 
-class BPETokenzer:
+class BPETokenizer:
     def __init__(self):
         self._merges = {}
         self._decode_vocab = {}
@@ -69,14 +70,21 @@ class BPETokenzer:
             vocab[idx] = vocab[a] + vocab[b]
         self._vocab = vocab
 
+    def save(self, filename):
+        with open(filename, 'wb') as f:
+            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
+
+def load_tokenizer(filename):
+    with open(filename, 'rb') as f:
+        tokenizer = pickle.load(f)
+    return tokenizer
+
 def build_corpus(sentences):
     corpus = []
     for sentence in sentences:
-        words = sentence.split()
-        for word in words:
+        for word in sentence.split():
             word = word.lower() + ' '
-            word = word.encode('utf-8')
-            word = list(map(int, word))
+            word = list(word.encode('utf-8'))
             corpus.append(word)
     return corpus
 
@@ -89,8 +97,9 @@ def df_to_corpus(df):
 
 df = pd.read_csv('data/train.csv')
 eng_corpus, hindi_corpus = df_to_corpus(df)
-en_tokenizer = BPETokenzer()
-en_tokenizer.train(eng_corpus, 10)
+en_tokenizer = BPETokenizer()
+en_tokenizer.train(eng_corpus[:1000], 1000)
+en_tokenizer.save('en_tokenizer.pkl')
 print('done')
 
 
