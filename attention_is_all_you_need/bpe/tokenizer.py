@@ -3,6 +3,7 @@ from collections import defaultdict
 from tqdm import tqdm
 from copy import deepcopy
 import pickle
+import re
 
 class BPETokenizer:
     def __init__(self):
@@ -43,26 +44,33 @@ class BPETokenizer:
                 i += 1
         return new_tokens
 
+    def get_corpus_stats(self, corpus):
+        stats = defaultdict(int)
+        for word in corpus:
+            word = list(word.encode('utf-8'))
+            word = tuple(word)
+            stats[word] += 1
+        return stats
+
     def train(self, train_corpus, num_merges):
-        corpus = deepcopy(train_corpus)
         last_token_id = 255
+        cstats = self.get_corpus_stats(train_corpus)
         for _ in tqdm(range(num_merges)):
             pair_count = defaultdict(int)
-            word_idx = defaultdict(set)
-            for idx, word in enumerate(corpus):
-                for i in range(1, len(word)):
-                    pair = (word[i-1], word[i])
-                    pair_count[pair] += 1
-                    word_idx[pair].add(idx)
+            for key, val in cstats.items():
+                for i in range(1, len(key)):
+                    pair = (key[i-1], key[i])
+                    pair_count[pair] += val
             if pair_count:
                 top_pair = max(pair_count, key=pair_count.get)
-                merged_token_id = last_token_id + 1
+                merged_token_id = last_token_id  + 1
                 last_token_id = merged_token_id
                 self._merges[top_pair] = merged_token_id
-                for idx in range(len(corpus)):
-                    if idx in word_idx[top_pair]:
-                        word = corpus[idx]
-                        corpus[idx] = self.merge(word, top_pair, merged_token_id)
+                new_cstats = {}
+                for key, val in cstats.items():
+                    key = self.merge(key, top_pair, merged_token_id)
+                    new_cstats[tuple(key)] = val
+                cstats = new_cstats
             else:
                 break
         vocab = {key: bytes([key]) for key in range(256)}
@@ -79,14 +87,12 @@ def load_tokenizer(filename):
         tokenizer = pickle.load(f)
     return tokenizer
 
-def build_corpus(sentences):
-    corpus = []
-    for sentence in sentences:
-        for word in sentence.split():
-            word = word.lower() + ' '
-            word = list(word.encode('utf-8'))
-            corpus.append(word)
-    return corpus
+def build_corpus(sents):
+    corpus = ' '.join(sents).lower()
+    punctuation_marks = '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'
+    corpus = re.sub(f"[{re.escape(punctuation_marks)}]", '', corpus)
+    words = [' '+word for word in corpus.split()]
+    return words
 
 def df_to_corpus(df):
     english_sentences = list(df['english'].values)
@@ -95,13 +101,24 @@ def df_to_corpus(df):
     h_cor = build_corpus(hindi_sentences)
     return e_cor, h_cor
 
-df = pd.read_csv('data/train.csv')
-eng_corpus, hindi_corpus = df_to_corpus(df)
-en_tokenizer = BPETokenizer()
-en_tokenizer.train(eng_corpus[:1000], 1000)
-en_tokenizer.save('en_tokenizer.pkl')
-print('done')
+if __name__ == "__main__":
+    data_dir = '../data'
+    save_tokenizer_dir = './saved'
+    df = pd.read_csv(f'{data_dir}/train.csv')
+    eng_corpus, hindi_corpus = df_to_corpus(df)
+    en_tokenizer = BPETokenizer()
+    print("Training EN tokenizer...")
+    en_tokenizer.train(eng_corpus, num_merges=5000)
+    print("EN tokenizer training done. Saving tokenizer on disk...")
+    en_tokenizer.save(f'{save_tokenizer_dir}/en_tokenizer.pkl')
+    print(f"Tokenizer saved at {save_tokenizer_dir}/en_tokenizer.pkl\n")
 
+    hi_tokenizer = BPETokenizer()
+    print("Training HI tokenizer...")
+    hi_tokenizer.train(hindi_corpus, num_merges=10000)
+    print("HI tokenizer training done. Saving tokenizer on disk...")
+    hi_tokenizer.save(f'{save_tokenizer_dir}/hi_tokenizer.pkl')
+    print(f"Tokenizer saved at {save_tokenizer_dir}/hi_tokenizer.pkl\n")
 
 
 """
