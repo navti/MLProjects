@@ -8,8 +8,9 @@ import re
 class BPETokenizer:
     def __init__(self):
         self._merges = {}
-        self._decode_vocab = {}
         self._vocab = {}
+        self._special_keys = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
+        self._special_tokens = {}
 
     def get_stats(self, token_ids):
         pair_counts = defaultdict(int)
@@ -18,6 +19,35 @@ class BPETokenizer:
         return pair_counts
 
     def encode(self, document):
+        st = {}
+        for k in self._special_keys:
+            it = re.finditer(re.escape(k), document)
+            for m in it:
+                st[(m.start(), m.end())] = k
+        st = dict(sorted(st.items()))
+        # if no special tokens
+        if len(st.keys()) == 0:
+            return self._encode(document)
+
+        splits = []
+        head = 0
+        for k in st:
+            if k[0] > head:
+                splits.append(document[head:k[0]])
+            splits.append(self._special_tokens[st[k]])
+            head = k[1]
+        if head <= len(document)-1:
+            splits.append(document[head:])
+
+        result = []
+        for item in splits:
+            if isinstance(item, int):
+                result += [item]
+            else:
+                result += self._encode(item)
+        return result
+
+    def _encode(self, document):
         tokens = list(document.encode('utf-8'))
         while True:
             pair_counts = self.get_stats(tokens)
@@ -77,6 +107,10 @@ class BPETokenizer:
         for (a,b), idx in self._merges.items():
             vocab[idx] = vocab[a] + vocab[b]
         self._vocab = vocab
+
+        for i,token in enumerate(self._special_keys):
+            self._vocab[last_token_id+1+i] = bytes(list(token.encode('utf-8')))
+            self._special_tokens[token] = last_token_id + 1 + i
 
     def save(self, filename):
         with open(filename, 'wb') as f:
