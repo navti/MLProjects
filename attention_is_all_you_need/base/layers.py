@@ -164,7 +164,7 @@ class ScaledDotProductAttention(nn.Module):
         # apply mask
         if mask is not None:
             mask = mask.to(self.device)
-            assert mask.dim() == 1 and mask.shape[0] == seq_len, f"mask should be a 1D 'seq length' long tensor."
+            assert mask.dim() == 2 and mask.shape == (seq_len, seq_len), f"mask should be a 2D 'seq_length x seq_length' tensor."
             # fill maksed positions with low value so it becomes 0 in softmax
             attn_score = attn_score.masked_fill(mask == 0, -1000)
         attn_score = self.softmax(attn_score)
@@ -183,7 +183,9 @@ if __name__ == '__main__':
     embedding = InputEmbedding(vocab_size=20, max_seq_len=10, d_model=d_model, device=device)
     token_emb = embedding(token_ids)
     multi_head = MultiHeadSelfAttention(d_model, num_attn_heads, device=device)
-    mask = torch.tensor([1,1,1,0,0]).to(device)
+    # causal mask
+    mask = torch.ones(seq_len, seq_len).to(device)
+    mask = torch.tril(mask)
     z = multi_head(token_emb, mask)
     layer_norm = LayerNorm(d_model, device=device)
     z = layer_norm(z)
