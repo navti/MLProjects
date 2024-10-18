@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from embeddings import InputEmbedding
+from base.embeddings import InputEmbedding
 
 class LayerNorm(nn.Module):
     """

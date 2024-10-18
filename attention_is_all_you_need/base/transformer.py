@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from blocks import *
+from base.blocks import *
 from torchinfo import summary
 
 class TransformerEncoder(nn.Module):
@@ -86,13 +86,15 @@ class Transformer(nn.Module):
         self.num_dec = kwargs.get('num_dec') if 'num_dec' in kwargs else args[1]
         self.d_model = kwargs.get('d_model') if 'd_model' in kwargs else args[2]
         self.num_attn_heads = kwargs.get('num_attn_heads') if 'num_attn_heads' in kwargs else args[3]
-        self.vocab_size = kwargs.get('vocab_size') if 'vocab_size' in kwargs else args[4]
-        self.max_seq_len = kwargs.get('max_seq_len') if 'max_seq_len' in kwargs else args[5]
-        self.pad_idx = kwargs.get('pad_idx') if 'pad_idx' in kwargs else args[6] if len(args) >= 7 else None
-        self.device = kwargs.get('device') if 'device' in kwargs else args[7] if len(args) == 8 else 'cpu'
+        self.enc_vocab_size = kwargs.get('enc_vocab_size') if 'enc_vocab_size' in kwargs else args[4]
+        self.dec_vocab_size = kwargs.get('dec_vocab_size') if 'dec_vocab_size' in kwargs else args[5]
+        self.max_seq_len = kwargs.get('max_seq_len') if 'max_seq_len' in kwargs else args[6]
+        self.enc_pad_idx = kwargs.get('enc_pad_idx') if 'enc_pad_idx' in kwargs else args[7] if len(args) >= 8 else None
+        self.dec_pad_idx = kwargs.get('dec_pad_idx') if 'dec_pad_idx' in kwargs else args[8] if len(args) >= 9 else None
+        self.device = kwargs.get('device') if 'device' in kwargs else args[9] if len(args) == 10 else 'cpu'
 
-        self.encoder = TransformerEncoder(self.num_enc, self.d_model, self.num_attn_heads, self.vocab_size, self.max_seq_len, self.pad_idx, device=self.device)
-        self.decoder = TransformerDecoder(self.num_dec, self.d_model, self.num_attn_heads, self.vocab_size, self.max_seq_len, self.pad_idx, device=self.device)
+        self.encoder = TransformerEncoder(self.num_enc, self.d_model, self.num_attn_heads, self.enc_vocab_size, self.max_seq_len, self.enc_pad_idx, device=self.device)
+        self.decoder = TransformerDecoder(self.num_dec, self.d_model, self.num_attn_heads, self.dec_vocab_size, self.max_seq_len, self.dec_pad_idx, device=self.device)
 
     def forward(self, enc_token_ids, dec_token_ids, enc_mask=None, dec_mask=None):
         """

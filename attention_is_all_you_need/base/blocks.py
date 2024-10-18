@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from layers import *
+from base.layers import *
 
 class EncoderBlock(nn.Module):
     """
