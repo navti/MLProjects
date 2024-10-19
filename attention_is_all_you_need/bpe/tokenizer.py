@@ -49,10 +49,10 @@ class BPETokenizer:
 
     def _encode(self, document):
         tokens = list(document.encode('utf-8'))
-        if len(tokens) <= 1:
-            return tokens
         while True:
             pair_counts = self.get_stats(tokens)
+            if len(pair_counts) == 0:
+                break
             pair = min(pair_counts, key=lambda k: self.merges.get(k, float('inf')))
             if pair in self.merges:
                 tokens = self.merge(tokens, pair, self.merges[pair])

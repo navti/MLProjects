@@ -27,9 +27,13 @@ class TranslateSet(Dataset):
         sos = [tokenizer.special_tokens["[SOS]"]]
         eos = [tokenizer.special_tokens["[EOS]"]]
         pad = [tokenizer.special_tokens["[PAD]"]]
+        pad_len = 0
         if len(tokens) >= context_len-2:
             tokens = sos + tokens[:context_len-2] + eos
         else:
             pad_len = context_len - len(tokens) - 2
             tokens = sos + tokens + eos + pad*pad_len
-        return torch.tensor(tokens), pad_len
+        pad_mask = torch.ones(context_len)
+        if pad_len > 0:
+            pad_mask[-pad_len:] = torch.zeros(pad_len)
+        return torch.tensor(tokens), pad_mask
