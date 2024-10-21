@@ -60,9 +60,17 @@ class BPETokenizer:
                 break
         return tokens
 
-    def decode(self, ids):
+    def decode_raw(self, ids):
         tokens = b''.join(self.vocab[idx] for idx in ids)
         return tokens.decode('utf-8', errors='replace')
+
+    def decode_nice(self, tokens):
+        special_tokens = set(self.special_tokens.values())
+        nice_tokens = []
+        for token in tokens:
+            if token not in special_tokens:
+                nice_tokens.append(token)
+        return self.decode_raw(nice_tokens)
 
     def merge(self, tokens, pair, token_id):
         new_tokens = []
