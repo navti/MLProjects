@@ -65,7 +65,7 @@ class TransformerDecoder(nn.Module):
         token_embeddings = self.input_embedding(token_ids)
         out = self.dec_blocks[0](token_embeddings, enc_out, mask)
         for dec_block in self.dec_blocks[1:]:
-            out = dec_block(out, enc_out)
+            out = dec_block(out, enc_out, mask)
         return out
 
 class Transformer(nn.Module):

@@ -31,6 +31,7 @@ def adjust_predictions(predictions, p_mask, pad_id):
     return predictions
 
 def infer(sent, context_len, model, device, en_tokenizer, hi_tokenizer):
+    model.eval()
     enc_in, _ = process_sentence(sent, context_len, en_tokenizer)
     enc_in = enc_in.unsqueeze(dim=0).to(device)
     out_tokens = []
@@ -47,7 +48,7 @@ def infer(sent, context_len, model, device, en_tokenizer, hi_tokenizer):
         next_token = predictions[len(out_tokens)-1].item()
     return hi_tokenizer.decode_nice(out_tokens)
 
-def train(model, device, epoch, optimizer, train_loader, loss_criterion):
+def train(model, device, epoch, optimizer, train_loader, loss_criterion, grad_scaler):
     model.train()
     dec_pad_idx = model.transformer.dec_pad_idx
     total_loss = 0
@@ -57,14 +58,17 @@ def train(model, device, epoch, optimizer, train_loader, loss_criterion):
         dec_in = dec_in.to(device)
         pad_mask = pad_mask[:,1:].to(device)
         targets = dec_in[:,1:]
+        with torch.autocast(device.type, enabled=True):
+            predictions = model(enc_in, dec_in[:,:-1])
+            predictions = adjust_predictions(predictions, pad_mask, dec_pad_idx)
+            predictions = torch.einsum('pqr->prq', predictions)
+            loss = loss_criterion(predictions, targets)
+            total_loss += (loss.item() / batch_size)
         optimizer.zero_grad()
-        predictions = model(enc_in, dec_in[:,:-1])
-        predictions = adjust_predictions(predictions, pad_mask, dec_pad_idx)
-        predictions = torch.einsum('pqr->prq', predictions)
-        loss = loss_criterion(predictions, targets)
-        total_loss += (loss.item() / batch_size)
-        loss.backward()
-        optimizer.step()
+        grad_scaler.scale(loss).backward()
+        grad_scaler.unscale_(optimizer)
+        grad_scaler.step(optimizer)
+        grad_scaler.update()
         if batch_idx % 100 == 0:
             print(f"Avg loss after batch {batch_idx+1}/{len(train_loader)}: {(total_loss/(batch_idx+1)):.4f}")
     avg_epoch_loss = total_loss/(batch_idx+1)
@@ -84,14 +88,14 @@ def evaluate(model, device, epoch, validation_loader, loss_criterion, tokenizer)
         targets = dec_in[:,1:]
         predictions = model(enc_in, dec_in[:,:-1])
         predictions = adjust_predictions(predictions, pad_mask, dec_pad_idx)
-        out_tokens = predictions.argmax(dim=-1)
+        out_tokens = predictions.argmax(dim=-1).squeeze()
         predictions = torch.einsum('pqr->prq', predictions)
         loss = loss_criterion(predictions, targets)
         total_loss += (loss.item() / batch_size)
         total_bleu_score += get_batch_bleu_score(out_tokens, targets, tokenizer)
     avg_validation_loss = total_loss/(batch_idx+1)
     avg_bleu_score = total_bleu_score/(batch_idx+1)
-    print(f"Validation after Epoch {epoch}:\n\tLoss: {avg_validation_loss:.2f}\n\tAvg BLEU score: {avg_bleu_score:.2f}")
+    print(f"Validation after Epoch {epoch}:\n\tLoss: {avg_validation_loss:.4f}\n\tAvg BLEU score: {avg_bleu_score:.4f}")
     return avg_validation_loss, avg_bleu_score
 
 def save_model(model, models_dir, name=None):
@@ -111,7 +115,6 @@ def save_model(model, models_dir, name=None):
 # load model
 def load_model(model_path, *args, **kwargs):
     model = Translator(*args, **kwargs)
-    # model_path = "results/saved_models/"+model_name+".pth"
     try:
         model.load_state_dict(torch.load(model_path, weights_only=True))
     except OSError as e:

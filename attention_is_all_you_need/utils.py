@@ -30,6 +30,8 @@ def bleu_score(out, ref, n=4):
     out_words = out.split()
     ref_words = ref.split()
     n = min(n, len(out_words))
+    if n == 0:
+        return 0
     weight = 1/n
     cp = 0
     for i in range(1,n+1):

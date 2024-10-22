@@ -6,21 +6,23 @@ from data.dataset import TranslateSet
 from torch.utils.data import DataLoader
 from torch import nn
 from torch import optim
+from torchinfo import summary
 import sys
+from torch.optim.lr_scheduler import StepLR
 
 def get_args():
     parser = argparse.ArgumentParser(description='English to Hindi translator')
-    parser.add_argument('--dmodel', '-d', metavar='MODEL_DIM', type=int, default=128, help='Model dimension')
+    parser.add_argument('--dmodel', '-d', metavar='MODEL_DIM', type=int, default=512, help='Model dimension')
     parser.add_argument('--attn-heads', '-a', metavar='NUM_HEADS', type=int, default=8, help='No. of self attention heads')
     parser.add_argument('--nenc', metavar='NUM_ENC', type=int, default=6, help='No. of encoder blocks in the transformer')
     parser.add_argument('--ndec', metavar='NUM_DEC', type=int, default=6, help='No. of decoder blocks in the transformer')
     parser.add_argument('--context-length', '-c', metavar='LENGTH', type=int, default=32, help='Max no. of tokens in the input sequence')
-    parser.add_argument('--epochs', '-e', metavar='NUM_EPOCHS', type=int, default=5, help='Number of epochs')
+    parser.add_argument('--epochs', '-e', metavar='NUM_EPOCHS', type=int, default=20, help='Number of epochs')
     parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='BATCH_SIZE', type=int, default=64, help='Batch size')
-    parser.add_argument('--lr', '-l', metavar='LR', type=float, default=1e-5, help='Learning rate', dest='lr')
+    parser.add_argument('--lr', '-l', metavar='LR', type=float, default=5e-5, help='Learning rate', dest='lr')
     parser.add_argument('--train', '-t', action='store_true', default=False, help='Train model with given parameters.')
     parser.add_argument('--save-model', action='store_true', default=False, help='For Saving the current Model')
-    parser.add_argument('--load', '-f', metavar='MODEL_PATH', type=str, default="", help='Load model from a .pth file. Required when running inference.')
+    parser.add_argument('--load', '-f', metavar='MODEL_PATH', type=str, default=None, help='Load model from a .pth file. Required when running inference.')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     return parser, parser.parse_args()
 
@@ -49,7 +51,9 @@ if __name__ == "__main__":
     model_kwargs['enc_pad_idx'] = en_tokenizer.special_tokens["[PAD]"]
     model_kwargs['dec_pad_idx'] = hi_tokenizer.special_tokens["[PAD]"]
     model_kwargs['device'] = device
-
+    # models_dir = f"{proj_dir}/model/saved_models"
+    # args.load = f"{models_dir}/translateEnHibase.pth"
+    # args.train = True
     if args.train:
         train_kwargs = {'batch_size': args.batch_size}
         test_kwargs = {'batch_size': args.batch_size}
@@ -71,21 +75,32 @@ if __name__ == "__main__":
         test_loader = DataLoader(test_set, **test_kwargs)
         validation_loader = DataLoader(validation_set, **validation_kwargs)
 
-        model = Translator(**model_kwargs).to(device)
+        if args.load != None:
+            print(f"Training existing model.")
+            print(f"Loading model from the given path: {args.load}")
+            model = load_model(args.load, **model_kwargs).to(device)
+        else:
+            model = Translator(**model_kwargs).to(device)
         loss_criterion = nn.CrossEntropyLoss()
         optimizer = optim.AdamW(model.parameters(), weight_decay=1e-2, lr=args.lr, betas=(0.9, 0.999))
+        scheduler = StepLR(optimizer, step_size=100, gamma=0.5)
+        grad_scaler = torch.amp.GradScaler(enabled=True)
+        print("Model summary:")
+        summary(model)
 
         # training loop
+        print("\nTraining model:")
         losses = {'train':[], 'validation':[]}
         scores = {'bleu':[]}
         for epoch in range(1, args.epochs+1):
             # train
-            avg_epoch_loss = train(model, device, epoch, optimizer, train_loader, loss_criterion)
+            avg_epoch_loss = train(model, device, epoch, optimizer, train_loader, loss_criterion, grad_scaler)
             losses['train'].append(avg_epoch_loss)
             # evaluate
             avg_loss, avg_bleu_score = evaluate(model, device, epoch, validation_loader, loss_criterion, hi_tokenizer)
             losses['validation'].append(avg_loss)
             scores['bleu'].append(avg_bleu_score)
+            scheduler.step()
 
         results_dir = f"{proj_dir}/results"
         models_dir = f"{proj_dir}/model/saved_models"
@@ -96,7 +111,6 @@ if __name__ == "__main__":
         if (args.save_model):
             save_model(model, models_dir, name=model_name)
     else:
-        models_dir = f"{proj_dir}/model/saved_models"
         model = load_model(args.load, **model_kwargs)
         if model == None:
             print("Check if the correct model path was provided to load from.")
