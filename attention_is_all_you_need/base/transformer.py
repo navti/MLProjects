@@ -75,9 +75,11 @@ class Transformer(nn.Module):
     :param num_dec: type int, no. of decoder blocks in transformer
     :param d_model: type int, embedding dimension of the model
     :param num_attn_heads: type int, no. of self attention heads inside the multi head layer
-    :param vocab_size: type int, no. of rows in the embedding table, size of vocabulary.
+    :param enc_vocab_size: for encoder, type int, no. of rows in the embedding table, size of vocabulary.
+    :param dec_vocab_size: for decoder, type int, no. of rows in the embedding table, size of vocabulary.
     :param max_seq_len: type int, max sequence length allowed, used by positional encoding layer
-    :param pad_idx: type int, the padding token id
+    :param enc_pad_idx: type int, the padding token id for encoder
+    :param dec_pad_idx: type int, the padding token id for decoder
     :param device: device to be used (cpu/cuda)
     """
     def __init__(self, *args, **kwargs):

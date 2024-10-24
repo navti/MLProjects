@@ -11,6 +11,7 @@ import sys
 from torch.optim.lr_scheduler import StepLR
 
 def get_args():
+    """ Get command line arguments """
     parser = argparse.ArgumentParser(description='English to Hindi translator')
     parser.add_argument('--dmodel', '-d', metavar='MODEL_DIM', type=int, default=512, help='Model dimension')
     parser.add_argument('--attn-heads', '-a', metavar='NUM_HEADS', type=int, default=8, help='No. of self attention heads')
