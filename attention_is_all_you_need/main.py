@@ -120,6 +120,6 @@ if __name__ == "__main__":
         # run inference loop
         model = model.to(device)
         while True:
-            en_sent = input("Enter an English sentence.\n")
+            en_sent = input("\nEnter an English sentence.\nEN: ")
             hi_sent = infer(en_sent, args.context_length, model, device, en_tokenizer, hi_tokenizer)
-            print(hi_sent)
+            print(f"HI: {hi_sent}")
