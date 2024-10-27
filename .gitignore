@@ -2,3 +2,7 @@
 CIFAR10/.ipynb_checkpoints
 CIFAR10/__pycache__
 CIFAR10/results
+scratch/*
+VAE/.ipynb_checkpoints
+VAE/__pycache__
+VAE/results

@@ -6,7 +6,9 @@ from torch.optim.lr_scheduler import StepLR
 from models import *
 
 import sys
-sys.path.insert(1, './..')
+# add to path variable so module can be found
+root_dir = '/'.join(__file__.split('/')[:-2])
+sys.path.append(root_dir)
 from utils.cifar_utils import *
 
 def train_model(args, model, device, train_loader, loss_criterion, optimizer, epoch):
@@ -103,7 +105,7 @@ def main():
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
 
-    data_dir = "../data/"
+    data_dir = root_dir+"/data/"
     train_files = glob.glob(data_dir + '**/*_batch_*', recursive=True)
     test_files = glob.glob(data_dir + '**/*test_batch*', recursive=True)
     train_files = list(map(unpickle, train_files))
@@ -128,16 +130,21 @@ def main():
 
     train_acc = []
     test_acc = []
+    args.epochs = 10
     for epoch in range(1,args.epochs+1):
         train_acc.append(train_model(args, model, device, train_loader, loss_criterion, optimizer, epoch))
         test_acc.append(test_model(args, model, device, test_loader, loss_criterion))
         scheduler.step()
         if (args.dry_run):
             break
-    save_plot(train_acc, test_acc)
+    
+    results_dir = root_dir+"/CIFAR10/results"
+    models_dir = results_dir+"/saved_models"
+    
+    save_plot(train_acc, test_acc, results_dir)
 
     if (args.save_model):
-        save_model(model)
+        save_model(model, models_dir)
 
 if __name__ == '__main__':
     main()
