@@ -1,4 +1,5 @@
-.ipynb_checkpoints
+*/**/.ipynb_checkpoints
+*/**/__pycache__
 CIFAR10/.ipynb_checkpoints
 CIFAR10/__pycache__
 CIFAR10/results
