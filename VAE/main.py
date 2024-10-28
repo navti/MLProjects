@@ -58,7 +58,7 @@ def main():
                         help='number of epochs to train (default: 50)')
     parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
                         help='learning rate (default: 0.1)')
-    parser.add_argument('--beta', type=float, default=1.0, metavar='beta',
+    parser.add_argument('--beta', type=float, default=0.1, metavar='beta',
                         help='factor for KL div loss (default: 1.0)')
     parser.add_argument('--nf', type=int, default=32, metavar='NF',
                         help='no. of filters (default: 32)')

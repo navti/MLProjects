@@ -72,12 +72,11 @@ class Decoder(nn.Module):
                                      nn.ReLU(inplace=True))
         self.dconv1 = deconv_block(16*nf, 8*nf, kernel_size=3, stride=1)
         self.res1 = nn.Sequential(conv_block(8*nf, 8*nf), conv_block(8*nf, 8*nf))
-        self.dconv2 = deconv_block(8*nf, 4*nf)
-        self.dconv3 = deconv_block(4*nf, 2*nf)
+        self.dconv2 = deconv_block(8*nf, 4*nf, kernel_size=5, stride=1)
+        self.dconv3 = deconv_block(4*nf, 2*nf, kernel_size=9, stride=1)
         self.res2 = nn.Sequential(conv_block(2*nf, 2*nf), conv_block(2*nf, 2*nf))
-        self.dconv4 = deconv_block(2*nf, nf)
+        self.dconv4 = deconv_block(2*nf, nf, kernel_size=17, stride=1)
         self.dconv5 = conv_block(nf, 3,activation=False)
-        
 
     def forward(self, z):
         z = self.linear1(z)
