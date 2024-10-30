@@ -58,7 +58,12 @@ def save_model(model, models_dir, name=None):
         save_model_path = models_dir+"/CIFAR10-"+timestr+".pth"
     else:
         save_model_path = models_dir+"/"+name+".pth"
-    torch.save(model.state_dict(), save_model_path)
+    try:
+        torch.save(model.state_dict(), save_model_path)
+        print(f"Model saved at: {save_model_path}")
+    except OSError as e:
+        print("Failed to save model.")
+        print(f"{e.strerror}: {e.filename}")
 
 # load model
 def load_model(model_name, model_class, *args, **kwargs):
@@ -85,6 +90,27 @@ def save_plot(train_acc, test_acc, results_dir, name=None):
     plt.ylabel('Accuracy')
     plt.legend()
     plt.savefig(save_plot_path, facecolor='w', edgecolor='none')
+    print(f"Plot saved at: {save_plot_path}")
+
+def save_plots(losses, results_dir, name=None):
+    pathlib.Path(results_dir).mkdir(parents=True, exist_ok=True)
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    if not name:
+        save_plot_path = results_dir+"/plot-"+timestr
+    else:
+        save_plot_path = results_dir+"/"+name
+    epochs = len(losses['kl_loss'])
+    plt.plot(range(1,epochs+1), losses['total_loss'], label='Total loss')
+    plt.plot(range(1,epochs+1), losses['recon_loss'], label='Reconstruction loss')
+    plt.plot(range(1,epochs+1), losses['kl_loss'], label='KL loss')
+    #plt.plot(range(1,epochs+1), losses['cl_loss'], label='CL loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.title(f"VAE CIFAR10")
+    plt.savefig(save_plot_path, facecolor='w', edgecolor='none')
+    print(f"Plot saved at: {save_plot_path}")
+    #plt.show()
 
 def get_mean_std(loader):
     # Compute the mean and standard deviation of all pixels in the dataset
@@ -102,33 +128,14 @@ def get_mean_std(loader):
 
     return mean, std
 
-def elbo_loss(xhat, x, mu, logvar, beta=1):
+def elbo_loss(xhat, x, mu, logvar, annealing_agent):
     batch_size = xhat.shape[0]
     recon_loss = F.mse_loss(xhat, x, reduction='sum') / batch_size
     kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(),axis=1)
     kl_loss = kl_div.mean()
-    beta = beta #kl_loss/recon_loss
-    total_loss = recon_loss + beta  * kl_loss
-    return total_loss, recon_loss, kl_loss, beta
-
-def save_plots(losses, beta, results_dir, name=None):
-    pathlib.Path(results_dir).mkdir(parents=True, exist_ok=True)
-    timestr = time.strftime("%Y%m%d-%H%M%S")
-    if not name:
-        save_plot_path = results_dir+"/plot-"+timestr
-    else:
-        save_plot_path = results_dir+"/"+name
-    epochs = len(losses['kl_loss'])
-    plt.plot(range(1,epochs+1), losses['total_loss'], label='Total loss')
-    plt.plot(range(1,epochs+1), losses['recon_loss'], label='Reconstruction loss')
-    plt.plot(range(1,epochs+1), losses['kl_loss'], label='KL loss')
-    #plt.plot(range(1,epochs+1), losses['cl_loss'], label='CL loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.title(f"VAE CIFAR10 beta = {beta}")
-    plt.savefig(save_plot_path, facecolor='w', edgecolor='none')
-    #plt.show()
+    kll = annealing_agent(kl_loss) #kl_loss/recon_loss
+    total_loss = recon_loss + kll
+    return total_loss, recon_loss, kl_loss, kll
 
 def generate_samples(rows, cols, model, inference_dir):
     pathlib.Path(inference_dir).mkdir(parents=True, exist_ok=True)

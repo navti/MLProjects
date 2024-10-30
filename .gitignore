@@ -6,3 +6,4 @@ scratch/*
 VAE/.ipynb_checkpoints
 VAE/__pycache__
 VAE/results
+utils/__pycache__

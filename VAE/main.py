@@ -1,10 +1,10 @@
 import torch
 import argparse
 import glob
-import pathlib
 from torch import optim
 from torch.optim.lr_scheduler import StepLR
 from models import *
+from annealer import Annealer
 from collections import defaultdict
 import sys
 # add to path variable so module can be found
@@ -13,7 +13,24 @@ sys.path.append(root_dir)
 torch.set_float32_matmul_precision('high')
 from utils.cifar_utils import *
 
-def train_model(model, device, train_loader, optimizer, loss_criterion, epoch, beta):
+def print_training_parameters(args, device):
+    print(f"")
+    print(f"=========== Training Parameters ===========")
+    print(f"Using device: {device}")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Epochs: {args.epochs}")
+    print(f"Learning rate: {args.lr}")
+    print(f"No. of filters: {args.nf}")
+    print(f"Latent dimension: {args.latent_dim}")
+    print(f"Baseline beta: {args.baseline_beta}")
+    print(f"Annealing steps: {args.annealing_steps}")
+    print(f"Annealing shape: {args.annealing_shape}")
+    print(f"Annealing disabled: {args.annealing_disable}")
+    print(f"Cyclic annealing disabled: {args.annealing_cyclic_disable}")
+    print(f"===========================================")
+    print(f"")
+
+def train_model(model, device, train_loader, optimizer, loss_criterion, epoch, annealing_agent):
     model.train()
     train_loss = 0
     total_kl_loss = 0
@@ -27,7 +44,7 @@ def train_model(model, device, train_loader, optimizer, loss_criterion, epoch, b
         xhat, x, mu, logvar, out_targets = model(data)
         classification_loss = loss_criterion(out_targets, targets)
         total_cl_loss += classification_loss.item()
-        loss, recon_loss, kl_loss, beta = elbo_loss(xhat, x, mu, logvar,beta)
+        loss, recon_loss, kl_loss, kll = elbo_loss(xhat, x, mu, logvar, annealing_agent)
         #print(f"loss: {loss.item()}")
         total_loss = loss + classification_loss
         train_loss += total_loss.item()
@@ -35,13 +52,14 @@ def train_model(model, device, train_loader, optimizer, loss_criterion, epoch, b
         total_kl_loss += kl_loss.item()
         total_loss.backward()
         optimizer.step()
+    annealing_agent.step()
     avg_kl_loss = total_kl_loss/(batchidx+1)
     avg_recon_loss = total_recon_loss/(batchidx+1)
     avg_loss = train_loss/(batchidx+1)
     avg_cl_loss = total_cl_loss/(batchidx+1)
     print(f"Train epoch: {epoch} [{(batchidx+1) * len(data)}/{len(train_loader.dataset)}\
           ({(100. * batchidx/len(train_loader)):.0f}%)]\tLoss: {avg_loss:.6f}\t")
-    return avg_loss, avg_recon_loss, avg_kl_loss, avg_cl_loss, beta
+    return avg_loss, avg_recon_loss, avg_kl_loss, avg_cl_loss
 
 def main():
     # Training settings
@@ -58,8 +76,16 @@ def main():
                         help='number of epochs to train (default: 50)')
     parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
                         help='learning rate (default: 0.1)')
-    parser.add_argument('--beta', type=float, default=0.1, metavar='beta',
-                        help='factor for KL div loss (default: 1.0)')
+    parser.add_argument('--baseline-beta', type=float, default=0.0, metavar='beta',
+                        help='beta value to start with (default: 0.0)')
+    parser.add_argument('--annealing-steps', type=int, default=10, metavar='steps',
+                        help='total steps in annealing (default: 10)')
+    parser.add_argument('--annealing-shape', type=str, default='logistic', metavar='shape',
+                        help='Annealing shape: [linear, cosine, logistic] (default: logistic)')
+    parser.add_argument('--annealing-disable', action='store_true', default=False,
+                        help='disables annealing for KL div. loss')
+    parser.add_argument('--annealing-cyclic-disable', action='store_true', default=False,
+                        help='disables cyclic annealing')
     parser.add_argument('--nf', type=int, default=32, metavar='NF',
                         help='no. of filters (default: 32)')
     parser.add_argument('--latent-dim', type=int, default=128, metavar='LD',
@@ -127,11 +153,20 @@ def main():
     loss_criterion = nn.CrossEntropyLoss()
     #print_model_summary(model)
 
+    # Annealing params
+    annealing_shape = args.annealing_shape
+    annealing_steps = args.annealing_steps
+    baseline_beta = args.baseline_beta
+    disable_cyclical = args.annealing_cyclic_disable
+    annealing_disable = args.annealing_disable
+    annealing_agent = Annealer(annealing_steps, annealing_shape, baseline_beta, disable_cyclical, annealing_disable)
+
+    print_training_parameters(args, device)
+
     # Run training loops
-    beta = args.beta
     losses = defaultdict(list)
     for epoch in range(1,args.epochs+1):
-        avg_loss, avg_recon_loss, avg_kl_loss, avg_cl_loss, beta = train_model(opt_model, device, train_loader, optimizer, loss_criterion, epoch, beta)
+        avg_loss, avg_recon_loss, avg_kl_loss, avg_cl_loss = train_model(opt_model, device, train_loader, optimizer, loss_criterion, epoch, annealing_agent)
         losses['total_loss'].append(avg_loss)
         losses['recon_loss'].append(avg_recon_loss)
         losses['kl_loss'].append(avg_kl_loss)
@@ -144,14 +179,14 @@ def main():
     models_dir = results_dir+"/saved_models"
     inference_dir = results_dir+"/generated"
 
-    save_plots(losses, beta, results_dir)
+    save_plots(losses, results_dir)
     # save model
-    model_name = f"VAE_CIFAR10_beta_{args.beta}_lr_{args.lr}"
+    model_name = f"VAE_CIFAR10_lr_{args.lr}"
     if (args.save_model):
         save_model(model, models_dir, name=model_name)
 
     # generate samples using the model
-    generate_samples(3,10,opt_model, inference_dir)
+    generate_samples(5,10,opt_model, inference_dir)
 
 if __name__ == '__main__':
     main()
