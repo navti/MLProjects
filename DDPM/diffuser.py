@@ -19,4 +19,4 @@ class GaussianDiffuser:
         alphas_bar_t_shape = torch.cat([torch.tensor(x0.shape[:-3]), torch.tensor([1]*3)])
         alphas_bar_t = alphas_bar_t.view(tuple(alphas_bar_t_shape))
         xt = torch.sqrt(alphas_bar_t)*x0 + torch.sqrt(1 - alphas_bar_t) * eps
-        return xt
+        return xt, eps
