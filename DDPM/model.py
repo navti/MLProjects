@@ -2,44 +2,13 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
+import pathlib
+import time
 
-__all__ = ['UNet']
-
-
-class TimeEmbedding(nn.Module):
-    """
-    Time embedding for timesteps, dimension same as d_model
-    :param max_seq_len: type int, max sequence length of input allowed
-    :param d_model: type int, embedding dimension for tokens
-    :param device: device to use when storing these encodings
-    :param device: device to be used (cpu/cuda)
-    """
-    def __init__(self, T, d_model, device='cpu'):
-        super(TimeEmbedding, self).__init__()
-        self.device = device
-        # initialize encoding table with zeros
-        self.time_embedding = torch.zeros(size=(T+1, d_model), dtype=torch.float32, device=device)
-        # time steps
-        time_steps = torch.arange(T+1, dtype=torch.float32, device=device)
-        # add a dimension so braodcasting would be possible
-        time_steps = time_steps.unsqueeze(dim=1)
-        # exponent : 2i
-        _2i = torch.arange(0, d_model, step=2, dtype=torch.float32, device=device)
-        # sin terms at idx 2i
-        stop = d_model//2 # to cover for odd d_model in cosine
-        self.time_embedding[:,0::2] = torch.sin(time_steps / (10000 ** (_2i / d_model)))
-        # cos terms at idx 2i+1
-        self.time_embedding[:,1::2] = torch.cos(time_steps / (10000 ** (_2i[:stop] / d_model)))
-
-    def forward(self, ts):
-        """
-        forward method to calculate time embedding
-        :param ts: type tensor[int]/list[int], input time steps
-        :return:
-            embeddings: size: batch, T+1, d_model
-        """
-        time_steps = torch.tensor(ts, device=self.device)
-        return self.time_embedding[time_steps, :]
+import os
+from utils.data_loading import make_cifar_set
+from diffuser import GaussianDiffuser
+from torch.utils.data import DataLoader
 
 
 """ Parts of the U-Net model """
@@ -100,7 +69,7 @@ class DownDoubleConv(nn.Module):
 class UpDoubleConv(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels, bilinear=True, activations=True):
+    def __init__(self, in_channels, out_channels, bilinear=False, activations=True):
         super(UpDoubleConv, self).__init__()
 
         # if bilinear, use the normal convolutions to reduce the number of channels
@@ -108,7 +77,7 @@ class UpDoubleConv(nn.Module):
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.double_conv = DoubleConv(in_channels, out_channels, in_channels // 2, activations=activations)
         else:
-            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=4, stride=2, padding=1)
             self.double_conv = DoubleConv(in_channels, out_channels, activations=activations)
 
     def forward(self, x1, x2):
@@ -132,38 +101,48 @@ class OutConv(nn.Module):
         return self.conv(x)
 
 class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=False, checkpointing=False):
+    def __init__(self, n_channels, n_classes, nf, bilinear=False, checkpointing=False):
         super(UNet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
         self.checkpointing = checkpointing
 
-        self.inc = DoubleConv(n_channels, 64)
-        self.down1 = DownDoubleConv(64, 128)
-        self.down2 = DownDoubleConv(128, 256)
-        self.down3 = DownDoubleConv(256, 512)
-        factor = 2 if bilinear else 1
-        self.down4 = DownDoubleConv(512, 1024 // factor)
-        self.up1 = UpDoubleConv(1024, 512 // factor, bilinear)
-        self.up2 = UpDoubleConv(512, 256 // factor, bilinear)
-        self.up3 = UpDoubleConv(256, 128 // factor, bilinear)
-        self.up4 = UpDoubleConv(128, 64, bilinear, activations=False)
-        self.outc = OutConv(64, n_classes)
+        self.inc = DoubleConv(n_channels, nf)
+        self.down1 = DownDoubleConv(nf, 2*nf)
+        self.down2 = DownDoubleConv(2*nf, 4*nf)
+        self.down3 = DownDoubleConv(4*nf, 8*nf)
+        self.down4 = DownDoubleConv(8*nf, 16*nf)
+        self.down5 = DownDoubleConv(16*nf, 32*nf)
+
+        self.up1 = UpDoubleConv(32*nf, 16*nf)
+        self.up2 = UpDoubleConv(16*nf, 8*nf)
+        self.up3 = UpDoubleConv(8*nf, 4*nf)
+        self.up4 = UpDoubleConv(4*nf, 2*nf)
+        self.up5 = UpDoubleConv(2*nf, nf)
+        self.double_conv1 = DoubleConv(n_channels, n_channels+1)
+        self.up6 = UpDoubleConv(nf, n_channels, activations=False)
+
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x):
+    def forward(self, x, t_emb):
         if self.checkpointing:
             x1 = checkpoint(self.inc, x, use_reentrant=False)
             x2 = checkpoint(self.down1, x1, use_reentrant=False)
             x3 = checkpoint(self.down2, x2, use_reentrant=False)
             x4 = checkpoint(self.down3, x3, use_reentrant=False)
             x5 = checkpoint(self.down4, x4, use_reentrant=False)
-            x = checkpoint(self.up1, x5,x4, use_reentrant=False)
-            x = checkpoint(self.up2, x,x3, use_reentrant=False)
-            x = checkpoint(self.up3, x,x2, use_reentrant=False)
-            x = checkpoint(self.up4, x,x1, use_reentrant=False)
-            logits = checkpoint(self.outc, x, use_reentrant=False)
+            x6 = checkpoint(self.down5, x5, use_reentrant=False)
+            x6 = x6 + t_emb[:, :, None, None]
+            y = checkpoint(self.up1, x6,x5, use_reentrant=False)
+            y = checkpoint(self.up2, y,x4, use_reentrant=False)
+            y = checkpoint(self.up3, y,x3, use_reentrant=False)
+            y = checkpoint(self.up4, y,x2, use_reentrant=False)
+            y = checkpoint(self.up5, y,x1, use_reentrant=False)
+            # 3 ch -> 4 ch, so they can be concatenated to form 8 ch
+            x = checkpoint(self.double_conv1, x, use_reentrant=False)
+            y = checkpoint(self.up6, y,x, use_reentrant=False)
+            logits = checkpoint(self.sigmoid, y, use_reentrant=False)
             # probs = checkpoint(self.sigmoid, logits, use_reentrant=False)
             return logits
 
@@ -172,9 +151,66 @@ class UNet(nn.Module):
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
-        logits = self.outc(x)
+        x6 = self.down4(x5)
+        y = self.up1(x6, x5)
+        y = self.up2(y, x4)
+        y = self.up3(y, x3)
+        y = self.up4(y, x2)
+        y = self.up5(y, x1)
+        x = self.double_conv1(x)
+        y = self.up6(y, x)
+        logits = self.sigmoid(y)
         return logits
+
+
+def save_model(model, models_dir, name=None):
+    """
+    Save model to disk
+    :param model: model to be saved
+    :param models_dir: directory where the model should be saved
+    :param name: model file name
+    :return: None
+    """
+    pathlib.Path(models_dir).mkdir(parents=True, exist_ok=True)
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    if not name:
+        save_model_path = models_dir+"/ddpm-"+timestr+".pth"
+    else:
+        save_model_path = models_dir+"/"+name+".pth"
+    try:
+        torch.save(model.state_dict(), save_model_path)
+        print(f"Model saved at: {save_model_path}")
+    except OSError as e:
+        print("Failed to save model.")
+        print(f"{e.strerror}: {e.filename}")
+
+# load model
+def load_model(model_path, *args, **kwargs):
+    """
+    Load model from disk
+    :param model_path: model file path
+    :param args: args for model to initialize
+    :param kwargs: keyword arguments for model to initialize
+    :return:
+        model: loaded model
+    """
+    model = UNet(*args, **kwargs)
+    try:
+        model.load_state_dict(torch.load(model_path, weights_only=True))
+    except OSError as e:
+        print(f"{e.strerror}: {e.filename}")
+        return None
+    return model
+
+if __name__ == "__main__":
+    cifar_data_dir = os.path.abspath("./data")
+    gaussian_diffuser = GaussianDiffuser()
+    trainset = make_cifar_set(data_dir=cifar_data_dir, diffuser=gaussian_diffuser)
+    train_loader = DataLoader(trainset, batch_size=16)
+    n_channels = 3
+    n_classes = 10
+    nf = 8
+    test_model = UNet(n_channels=n_channels, n_classes=n_classes, nf=nf, checkpointing=True)
+    xt, eps, t_embs, labels = next(iter(train_loader))
+    out = test_model(xt, t_embs)
+    print(f"{out.shape}")

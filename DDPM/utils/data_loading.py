@@ -57,8 +57,8 @@ class CIFARDataset(Dataset):
             image = self.image_transforms(image)
         if self.diffuser:
             x0 = image.unsqueeze(0)
-            xt, eps, ts = self.diffuser(x0)
-            return x0.squeeze(), xt.squeeze(), eps.squeeze(), ts.squeeze(), label
+            xt, eps, t_emb = self.diffuser(x0)
+            return xt.squeeze(), eps.squeeze(), t_emb.squeeze(), label
         return image, label
 
 def make_cifar_set(data_dir="../data/", diffuser=None):
