@@ -69,7 +69,7 @@ class DownDoubleConv(nn.Module):
 class UpDoubleConv(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels, bilinear=False, activations=True):
+    def __init__(self, in_channels, out_channels, bilinear=False, activations=True, kernel_size=4, stride=2, padding=1):
         super(UpDoubleConv, self).__init__()
 
         # if bilinear, use the normal convolutions to reduce the number of channels
@@ -77,7 +77,7 @@ class UpDoubleConv(nn.Module):
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.double_conv = DoubleConv(in_channels, out_channels, in_channels // 2, activations=activations)
         else:
-            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=4, stride=2, padding=1)
+            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=kernel_size, stride=stride, padding=padding)
             self.double_conv = DoubleConv(in_channels, out_channels, activations=activations)
 
     def forward(self, x1, x2):
@@ -101,12 +101,18 @@ class OutConv(nn.Module):
         return self.conv(x)
 
 class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, nf, bilinear=False, checkpointing=False):
+    def __init__(self, n_channels=3, n_classes=10, nf=8, d_model=256, bilinear=False, checkpointing=False):
         super(UNet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
         self.checkpointing = checkpointing
+
+        self.time_proj1 = nn.Linear(d_model, 32*32)
+        self.time_proj2 = nn.Linear(d_model, 16*16)
+        self.time_proj3 = nn.Linear(d_model, 8*8)
+        self.time_proj4 = nn.Linear(d_model, 4*4)
+        self.time_proj5 = nn.Linear(d_model, 2*2)
 
         self.inc = DoubleConv(n_channels, nf)
         self.down1 = DownDoubleConv(nf, 2*nf)
@@ -121,46 +127,101 @@ class UNet(nn.Module):
         self.up4 = UpDoubleConv(4*nf, 2*nf)
         self.up5 = UpDoubleConv(2*nf, nf)
         self.double_conv1 = DoubleConv(n_channels, n_channels+1)
-        self.up6 = UpDoubleConv(nf, n_channels, activations=False)
+        self.up6 = UpDoubleConv(nf, n_channels, activations=False, kernel_size=3, stride=1, padding=1)
 
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x, t_emb):
+        B = x.shape[0]
         if self.checkpointing:
             x1 = checkpoint(self.inc, x, use_reentrant=False)
+            t1 = checkpoint(self.time_proj1, t_emb, use_reentrant=False)
+            x1 = x1 + t1.view(size=(B,1,*x1.shape[-2:]))
+
             x2 = checkpoint(self.down1, x1, use_reentrant=False)
+            t2 = checkpoint(self.time_proj2, t_emb, use_reentrant=False)
+            x2 = x2 + t2.view(size=(B,1,*x2.shape[-2:]))
+
             x3 = checkpoint(self.down2, x2, use_reentrant=False)
+            t3 = checkpoint(self.time_proj3, t_emb, use_reentrant=False)
+            x3 = x3 + t3.view(size=(B,1,*x3.shape[-2:]))
+
             x4 = checkpoint(self.down3, x3, use_reentrant=False)
+            t4 = checkpoint(self.time_proj4, t_emb, use_reentrant=False)
+            x4 = x4 + t4.view(size=(B,1,*x4.shape[-2:]))
+
             x5 = checkpoint(self.down4, x4, use_reentrant=False)
+            t5 = checkpoint(self.time_proj5, t_emb, use_reentrant=False)
+            x5 = x5 + t5.view(size=(B,1,*x5.shape[-2:]))
+
             x6 = checkpoint(self.down5, x5, use_reentrant=False)
             x6 = x6 + t_emb[:, :, None, None]
+
             y = checkpoint(self.up1, x6,x5, use_reentrant=False)
+            y = y + t5.view(size=(B,1,*y.shape[-2:]))
+
             y = checkpoint(self.up2, y,x4, use_reentrant=False)
+            y = y + t4.view(size=(B,1,*y.shape[-2:]))
+
             y = checkpoint(self.up3, y,x3, use_reentrant=False)
+            y = y + t3.view(size=(B,1,*y.shape[-2:]))
+
             y = checkpoint(self.up4, y,x2, use_reentrant=False)
+            y = y + t2.view(size=(B,1,*y.shape[-2:]))
+
             y = checkpoint(self.up5, y,x1, use_reentrant=False)
+            y = y + t1.view(size=(B,1,*y.shape[-2:]))
+
             # 3 ch -> 4 ch, so they can be concatenated to form 8 ch
             x = checkpoint(self.double_conv1, x, use_reentrant=False)
+
             y = checkpoint(self.up6, y,x, use_reentrant=False)
-            logits = checkpoint(self.sigmoid, y, use_reentrant=False)
-            # probs = checkpoint(self.sigmoid, logits, use_reentrant=False)
-            return logits
+
+            return y
 
         x1 = self.inc(x)
+        t1 = self.time_proj1(t_emb)
+        x1 = x1 + t1.view(size=(B,1,*x1.shape[-2:]))
+
         x2 = self.down1(x1)
+        t2 = self.time_proj1(t_emb)
+        x2 = x2 + t2.view(size=(B,1,*x2.shape[-2:]))
+
         x3 = self.down2(x2)
+        t3 = self.time_proj1(t_emb)
+        x3 = x3 + t3.view(size=(B,1,*x3.shape[-2:]))
+
         x4 = self.down3(x3)
+        t4 = self.time_proj1(t_emb)
+        x4 = x4 + t4.view(size=(B,1,*x4.shape[-2:]))
+
         x5 = self.down4(x4)
+        t5 = self.time_proj1(t_emb)
+        x5 = x5 + t5.view(size=(B,1,*x5.shape[-2:]))
+
         x6 = self.down4(x5)
+        x6 = x6 + t_emb[:, :, None, None]
+
         y = self.up1(x6, x5)
+        y = y + t5.view(size=(B,1,*y.shape[-2:]))
+
         y = self.up2(y, x4)
+        y = y + t4.view(size=(B,1,*y.shape[-2:]))
+
         y = self.up3(y, x3)
+        y = y + t3.view(size=(B,1,*y.shape[-2:]))
+
         y = self.up4(y, x2)
+        y = y + t2.view(size=(B,1,*y.shape[-2:]))
+
         y = self.up5(y, x1)
+        y = y + t1.view(size=(B,1,*y.shape[-2:]))
+
         x = self.double_conv1(x)
+
         y = self.up6(y, x)
-        logits = self.sigmoid(y)
-        return logits
+
+        return y
 
 
 def save_model(model, models_dir, name=None):
