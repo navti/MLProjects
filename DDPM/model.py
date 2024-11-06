@@ -244,22 +244,22 @@ class UNet(nn.Module):
         x1 = x1 + t1.view(size=(B, 1, *x1.shape[-2:]))
 
         x2 = self.down1(x1)
-        t2 = self.time_proj1(t_emb)
+        t2 = self.time_proj2(t_emb)
         x2 = x2 + t2.view(size=(B, 1, *x2.shape[-2:]))
 
         x3 = self.down2(x2)
-        t3 = self.time_proj1(t_emb)
+        t3 = self.time_proj3(t_emb)
         x3 = x3 + t3.view(size=(B, 1, *x3.shape[-2:]))
 
         x4 = self.down3(x3)
-        t4 = self.time_proj1(t_emb)
+        t4 = self.time_proj4(t_emb)
         x4 = x4 + t4.view(size=(B, 1, *x4.shape[-2:]))
 
         x5 = self.down4(x4)
-        t5 = self.time_proj1(t_emb)
+        t5 = self.time_proj5(t_emb)
         x5 = x5 + t5.view(size=(B, 1, *x5.shape[-2:]))
 
-        x6 = self.down4(x5)
+        x6 = self.down5(x5)
         x6 = x6 + t_emb[:, :, None, None]
 
         y = self.up1(x6, x5)
@@ -323,6 +323,48 @@ def load_model(model_path, *args, **kwargs):
         print(f"{e.strerror}: {e.filename}")
         return None
     return model
+
+
+def train(model, device, epoch, optimizer, train_loader, loss_criterion, grad_scaler):
+    """
+    Train model
+    :param model: model to train
+    :param device: device on which model should be trained
+    :param epoch: current epoch number
+    :param optimizer: optimizer
+    :param train_loader: loader to load training data from
+    :param loss_criterion: loss function to be used
+    :param grad_scaler: gradient scaler to be used with amp
+    :return:
+        avg_epoch_loss: avg loss for current epoch
+    """
+    model.train()
+    total_loss = 0
+    for batch_idx, (xt, eps, t_embs, labels) in enumerate(train_loader):
+        xt = xt.to(device)
+        eps = eps.to(device)
+        t_embs = t_embs.to(device)
+        labels = labels.to(device)
+        batch_size = xt.shape[0]
+        # use automatic mixed precision training
+        with torch.autocast(device.type, enabled=True):
+            predicted_eps = model(xt, t_embs)
+            loss = loss_criterion(predicted_eps, eps)
+            total_loss += loss.item() / batch_size
+        optimizer.zero_grad()
+        # scale gradients when doing backward pass, avoid vanishing gradients
+        grad_scaler.scale(loss).backward()
+        # unscale gradients before applying
+        grad_scaler.unscale_(optimizer)
+        grad_scaler.step(optimizer)
+        grad_scaler.update()
+        # if batch_idx % 100 == 0:
+        #     print(
+        #         f"Avg loss after batch {batch_idx+1}/{len(train_loader)}: {(total_loss/(batch_idx+1)):.4f}"
+        #     )
+    avg_epoch_loss = total_loss / (batch_idx + 1)
+    print(f"Epoch {epoch}: Loss: {avg_epoch_loss:.4f}")
+    return avg_epoch_loss
 
 
 if __name__ == "__main__":
