@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 import pathlib
 import time
-
+from utils.plotting import *
 import os
 from utils.data_loading import make_cifar_set
 from diffuser import GaussianDiffuser
@@ -39,7 +39,8 @@ class DoubleConv(nn.Module):
                 nn.Conv2d(
                     in_channels, mid_channels, kernel_size=3, padding=1, bias=False
                 ),
-                # nn.BatchNorm2d(mid_channels),
+                nn.BatchNorm2d(mid_channels),
+                # nn.ReLU(inplace=True),
                 nn.Conv2d(
                     mid_channels, out_channels, kernel_size=3, padding=1, bias=False
                 ),
@@ -104,7 +105,7 @@ class UpDoubleConv(nn.Module):
                 padding=padding,
             )
             self.double_conv = DoubleConv(
-                in_channels, out_channels, activations=activations
+                (out_channels + in_channels // 2), out_channels, activations=activations
             )
 
     def forward(self, x1, x2):
@@ -168,20 +169,26 @@ class UNet(nn.Module):
         n_channels = self.n_channels
         nf = self.nf
 
-        self.time_proj1 = nn.Linear(d_model, 32 * 32)
-        self.time_proj2 = nn.Linear(d_model, 16 * 16)
-        self.time_proj3 = nn.Linear(d_model, 8 * 8)
-        self.time_proj4 = nn.Linear(d_model, 4 * 4)
-        self.time_proj5 = nn.Linear(d_model, 2 * 2)
+        self.time_down_proj1 = nn.Linear(d_model, 32 * 32)
+        self.time_down_proj2 = nn.Linear(d_model, 16 * 16)
+        self.time_down_proj3 = nn.Linear(d_model, 8 * 8)
+        self.time_down_proj4 = nn.Linear(d_model, 4 * 4)
+        self.time_down_proj5 = nn.Linear(d_model, 2 * 2)
+
+        # self.time_up_proj1 = nn.Linear(d_model, 32 * 32)
+        # self.time_up_proj2 = nn.Linear(d_model, 16 * 16)
+        # self.time_up_proj3 = nn.Linear(d_model, 8 * 8)
+        # self.time_up_proj4 = nn.Linear(d_model, 4 * 4)
+        # self.time_up_proj5 = nn.Linear(d_model, 2 * 2)
 
         self.inc = DoubleConv(n_channels, nf)
         self.down1 = DownDoubleConv(nf, 2 * nf)
         self.down2 = DownDoubleConv(2 * nf, 4 * nf)
         self.down3 = DownDoubleConv(4 * nf, 8 * nf)
         self.down4 = DownDoubleConv(8 * nf, 16 * nf)
-        self.down5 = DownDoubleConv(16 * nf, 32 * nf)
+        self.down5 = DownDoubleConv(16 * nf, d_model)
 
-        self.up1 = UpDoubleConv(32 * nf, 16 * nf)
+        self.up1 = UpDoubleConv(d_model, 16 * nf)
         self.up2 = UpDoubleConv(16 * nf, 8 * nf)
         self.up3 = UpDoubleConv(8 * nf, 4 * nf)
         self.up4 = UpDoubleConv(4 * nf, 2 * nf)
@@ -195,89 +202,94 @@ class UNet(nn.Module):
         B = x.shape[0]
         if self.checkpointing:
             x1 = checkpoint(self.inc, x, use_reentrant=False)
-            t1 = checkpoint(self.time_proj1, t_emb, use_reentrant=False)
-            x1 = x1 + t1.view(size=(B, 1, *x1.shape[-2:]))
+            t1_down = checkpoint(self.time_down_proj1, t_emb, use_reentrant=False)
+            x1 = x1 + t1_down.view(size=(B, 1, *x1.shape[-2:]))
 
             x2 = checkpoint(self.down1, x1, use_reentrant=False)
-            t2 = checkpoint(self.time_proj2, t_emb, use_reentrant=False)
-            x2 = x2 + t2.view(size=(B, 1, *x2.shape[-2:]))
+            t2_down = checkpoint(self.time_down_proj2, t_emb, use_reentrant=False)
+            x2 = x2 + t2_down.view(size=(B, 1, *x2.shape[-2:]))
 
             x3 = checkpoint(self.down2, x2, use_reentrant=False)
-            t3 = checkpoint(self.time_proj3, t_emb, use_reentrant=False)
-            x3 = x3 + t3.view(size=(B, 1, *x3.shape[-2:]))
+            t3_down = checkpoint(self.time_down_proj3, t_emb, use_reentrant=False)
+            x3 = x3 + t3_down.view(size=(B, 1, *x3.shape[-2:]))
 
             x4 = checkpoint(self.down3, x3, use_reentrant=False)
-            t4 = checkpoint(self.time_proj4, t_emb, use_reentrant=False)
-            x4 = x4 + t4.view(size=(B, 1, *x4.shape[-2:]))
+            t4_down = checkpoint(self.time_down_proj4, t_emb, use_reentrant=False)
+            x4 = x4 + t4_down.view(size=(B, 1, *x4.shape[-2:]))
 
             x5 = checkpoint(self.down4, x4, use_reentrant=False)
-            t5 = checkpoint(self.time_proj5, t_emb, use_reentrant=False)
-            x5 = x5 + t5.view(size=(B, 1, *x5.shape[-2:]))
+            t5_down = checkpoint(self.time_down_proj5, t_emb, use_reentrant=False)
+            x5 = x5 + t5_down.view(size=(B, 1, *x5.shape[-2:]))
 
             x6 = checkpoint(self.down5, x5, use_reentrant=False)
             x6 = x6 + t_emb[:, :, None, None]
 
             y = checkpoint(self.up1, x6, x5, use_reentrant=False)
-            y = y + t5.view(size=(B, 1, *y.shape[-2:]))
+            # t5_up = checkpoint(self.time_up_proj5, t_emb, use_reentrant=False)
+            y = y + t5_down.view(size=(B, 1, *y.shape[-2:]))
 
             y = checkpoint(self.up2, y, x4, use_reentrant=False)
-            y = y + t4.view(size=(B, 1, *y.shape[-2:]))
+            # t4_up = checkpoint(self.time_up_proj4, t_emb, use_reentrant=False)
+            y = y + t4_down.view(size=(B, 1, *y.shape[-2:]))
 
             y = checkpoint(self.up3, y, x3, use_reentrant=False)
-            y = y + t3.view(size=(B, 1, *y.shape[-2:]))
+            # t3_up = checkpoint(self.time_up_proj3, t_emb, use_reentrant=False)
+            y = y + t3_down.view(size=(B, 1, *y.shape[-2:]))
 
             y = checkpoint(self.up4, y, x2, use_reentrant=False)
-            y = y + t2.view(size=(B, 1, *y.shape[-2:]))
+            # t2_up = checkpoint(self.time_up_proj2, t_emb, use_reentrant=False)
+            y = y + t2_down.view(size=(B, 1, *y.shape[-2:]))
 
             y = checkpoint(self.up5, y, x1, use_reentrant=False)
-            y = y + t1.view(size=(B, 1, *y.shape[-2:]))
-
-            # 3 ch -> 4 ch, so they can be concatenated to form 8 ch
-            x = checkpoint(self.double_conv1, x, use_reentrant=False)
+            # t1_up = checkpoint(self.time_up_proj1, t_emb, use_reentrant=False)
+            y = y + t1_down.view(size=(B, 1, *y.shape[-2:]))
 
             y = checkpoint(self.up6, y, x, use_reentrant=False)
 
             return y
 
         x1 = self.inc(x)
-        t1 = self.time_proj1(t_emb)
-        x1 = x1 + t1.view(size=(B, 1, *x1.shape[-2:]))
+        t1_down = self.time_down_proj1(t_emb)
+        x1 = x1 + t1_down.view(size=(B, 1, *x1.shape[-2:]))
 
         x2 = self.down1(x1)
-        t2 = self.time_proj2(t_emb)
-        x2 = x2 + t2.view(size=(B, 1, *x2.shape[-2:]))
+        t2_down = self.time_down_proj2(t_emb)
+        x2 = x2 + t2_down.view(size=(B, 1, *x2.shape[-2:]))
 
         x3 = self.down2(x2)
-        t3 = self.time_proj3(t_emb)
-        x3 = x3 + t3.view(size=(B, 1, *x3.shape[-2:]))
+        t3_down = self.time_down_proj3(t_emb)
+        x3 = x3 + t3_down.view(size=(B, 1, *x3.shape[-2:]))
 
         x4 = self.down3(x3)
-        t4 = self.time_proj4(t_emb)
-        x4 = x4 + t4.view(size=(B, 1, *x4.shape[-2:]))
+        t4_down = self.time_down_proj4(t_emb)
+        x4 = x4 + t4_down.view(size=(B, 1, *x4.shape[-2:]))
 
         x5 = self.down4(x4)
-        t5 = self.time_proj5(t_emb)
-        x5 = x5 + t5.view(size=(B, 1, *x5.shape[-2:]))
+        t5_down = self.time_down_proj5(t_emb)
+        x5 = x5 + t5_down.view(size=(B, 1, *x5.shape[-2:]))
 
         x6 = self.down5(x5)
         x6 = x6 + t_emb[:, :, None, None]
 
         y = self.up1(x6, x5)
-        y = y + t5.view(size=(B, 1, *y.shape[-2:]))
+        # t5_up = self.time_up_proj5(t_emb)
+        y = y + t5_down.view(size=(B, 1, *y.shape[-2:]))
 
         y = self.up2(y, x4)
-        y = y + t4.view(size=(B, 1, *y.shape[-2:]))
+        # t4_up = self.time_up_proj4(t_emb)
+        y = y + t4_down.view(size=(B, 1, *y.shape[-2:]))
 
         y = self.up3(y, x3)
-        y = y + t3.view(size=(B, 1, *y.shape[-2:]))
+        # t3_up = self.time_up_proj3(t_emb)
+        y = y + t3_down.view(size=(B, 1, *y.shape[-2:]))
 
         y = self.up4(y, x2)
-        y = y + t2.view(size=(B, 1, *y.shape[-2:]))
+        # t2_up = self.time_up_proj2(t_emb)
+        y = y + t2_down.view(size=(B, 1, *y.shape[-2:]))
 
         y = self.up5(y, x1)
-        y = y + t1.view(size=(B, 1, *y.shape[-2:]))
-
-        x = self.double_conv1(x)
+        # t1_up = self.time_up_proj1(t_emb)
+        y = y + t1_down.view(size=(B, 1, *y.shape[-2:]))
 
         y = self.up6(y, x)
 
@@ -340,7 +352,7 @@ def train(model, device, epoch, optimizer, train_loader, loss_criterion, grad_sc
     """
     model.train()
     total_loss = 0
-    for batch_idx, (xt, eps, t_embs, labels) in enumerate(train_loader):
+    for batch_idx, (xt, eps, t_embs, ts, labels) in enumerate(train_loader):
         xt = xt.to(device)
         eps = eps.to(device)
         t_embs = t_embs.to(device)
@@ -356,15 +368,17 @@ def train(model, device, epoch, optimizer, train_loader, loss_criterion, grad_sc
         grad_scaler.scale(loss).backward()
         # unscale gradients before applying
         grad_scaler.unscale_(optimizer)
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
         grad_scaler.step(optimizer)
         grad_scaler.update()
         # if batch_idx % 100 == 0:
         #     print(
         #         f"Avg loss after batch {batch_idx+1}/{len(train_loader)}: {(total_loss/(batch_idx+1)):.4f}"
         #     )
+    # draw(xt, ts, name="noisy_samples")
     avg_epoch_loss = total_loss / (batch_idx + 1)
-    print(f"Epoch {epoch}: Loss: {avg_epoch_loss:.4f}")
-    return avg_epoch_loss
+    print(f"Epoch {epoch}: Loss: {10000*avg_epoch_loss:.5f}")
+    return 10000 * avg_epoch_loss
 
 
 if __name__ == "__main__":
