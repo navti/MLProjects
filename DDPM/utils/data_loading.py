@@ -38,6 +38,7 @@ def get_cifar_data(data_dir):
 
 def preprocess_image(img):
     torch_img = torch.from_numpy(img) / 255
+    torch_img = (torch_img - 0.5) * 2
     torch_img = torch_img.view(size=(3, 32, 32))
     return torch_img
 
@@ -63,8 +64,8 @@ class CIFARDataset(Dataset):
             image = self.image_transforms(image)
         if self.diffuser:
             x0 = image.unsqueeze(0)
-            xt, eps, t_emb = self.diffuser(x0)
-            return xt.squeeze(), eps.squeeze(), t_emb.squeeze(), label
+            xt, eps, t_emb, ts = self.diffuser(x0)
+            return xt.squeeze(), eps.squeeze(), t_emb.squeeze(), ts, label
         return image, label
 
 

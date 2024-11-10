@@ -47,13 +47,12 @@ class TimeEmbedding(nn.Module):
 
 
 class GaussianDiffuser(object):
-    def __init__(self, betas=[1e-4, 0.02], T=1000, d_model=256, device="cpu"):
-        self.device = device
+    def __init__(self, betas=[1e-4, 0.02], T=1000, d_model=256):
         self.T = T
-        self.time_embedding = TimeEmbedding(T, d_model, device)
-        self.betas = torch.linspace(betas[0], betas[1], steps=T, device=device)
+        self.time_embedding = TimeEmbedding(T, d_model)
+        self.betas = torch.linspace(betas[0], betas[1], steps=T)
         # to align with timestep indices
-        self.betas = torch.cat([torch.tensor([0]).to(device), self.betas]).to(device)
+        self.betas = torch.cat([torch.tensor([0]), self.betas])
         self.alphas = 1 - self.betas
         self.alphas_bar = self.alphas.cumprod(dim=0)
 
@@ -61,10 +60,9 @@ class GaussianDiffuser(object):
         return self.diffuse(x0)
 
     def diffuse(self, x0):
-        x0 = x0.to(self.device)
         batch_size, *_ = x0.shape
         # sample timesteps
-        ts = torch.randint(1, self.T + 1, size=(batch_size,), device=self.device)
+        ts = torch.randint(1, self.T + 1, size=(batch_size,))
         t_embs = self.time_embedding(ts)
         # sample noise from a normal distribution
         eps = torch.randn_like(x0)
@@ -74,28 +72,34 @@ class GaussianDiffuser(object):
         )
         alphas_bar_t = alphas_bar_t.view(tuple(alphas_bar_t_shape))
         xt = torch.sqrt(alphas_bar_t) * x0 + torch.sqrt(1 - alphas_bar_t) * eps
-        return xt, eps, t_embs
+        return xt, eps, t_embs, ts
 
     def sample(self, model, size, device="cpu"):
         # size: BCHW
         model.eval()
         batch_size = size[0]
-        xt = torch.randn(size=size, device=device)
-        ts = torch.tensor(list(range(self.T, 0, -1)), device=device)
+        xt = torch.randn(size=size)
+        ts = torch.tensor(list(range(self.T, 0, -1)))
         for t in ts:
-            t_emb = self.time_embedding(t).to(device)
+            t_emb = self.time_embedding(t)
             t_emb = t_emb.expand(batch_size, -1)
+            xt = xt.to(device)
+            t_emb = t_emb.to(device)
             eps = model(xt, t_emb)
             factor = self.betas[t] / torch.sqrt(1 - self.alphas_bar[t])
             mean_t_bar = (xt - eps * factor) / torch.sqrt(self.alphas[t])
             sigma_t = torch.sqrt(self.betas[t])
             z = torch.randn_like(mean_t_bar)
-            if t > 1:
-                xt = mean_t_bar + sigma_t * z
-            else:
+            if t == 1:
                 x0 = torch.clamp(mean_t_bar, min=-1.0, max=1.0)
                 x0 = (x0 + 1) / 2
                 return x0
+            xt_1 = mean_t_bar + sigma_t * z
+            # clear gpu tensors
+            del xt, t_emb, eps, mean_t_bar, z
+            xt = xt_1.detach().clone()
+            del xt_1
+            torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
