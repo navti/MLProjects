@@ -19,15 +19,15 @@ def save_plots(losses, results_dir, name=None):
         save_plot_path = results_dir + "/plot-" + timestr
     else:
         save_plot_path = results_dir + "/" + name
-    epochs = len(losses["train"] if "train" in losses else losses["bleu"])
+    steps = len(losses["train"] if "train" in losses else losses["bleu"])
     if "train" in losses:
-        plt.plot(range(1, epochs + 1), losses["train"], label="Train loss")
+        plt.plot(range(1, steps + 1), losses["train"], label="Train loss")
         # plt.plot(range(1, epochs + 1), losses["validation"], label="Validation loss")
         plt.ylabel("Loss")
     else:
-        plt.plot(range(1, epochs + 1), losses["bleu"], label="BLEU score")
+        plt.plot(range(1, steps + 1), losses["bleu"], label="BLEU score")
         plt.ylabel("Score")
-    plt.xlabel("Epoch")
+    plt.xlabel("Steps")
     plt.legend()
     plt.title(f"DDPM loss curve")
     plt.savefig(save_plot_path, facecolor="w", edgecolor="none")

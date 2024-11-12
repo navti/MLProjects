@@ -2,7 +2,7 @@ import torch
 from torch import optim
 from torch import nn
 from torchinfo import summary
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import StepLR, LambdaLR
 from model import *
 import sys
 from collections import defaultdict
@@ -26,11 +26,10 @@ def print_training_parameters(args, device):
     print(f"=========== Training Parameters ===========")
     print(f"Using device: {device}")
     print(f"Batch size: {args.batch_size}")
-    print(f"Epochs: {args.epochs}")
-    print(f"Learning rate: {args.lr}")
-    print(f"LR scheduler step size: {args.lr_steps}")
-    print(f"Gamma for stepLR scheduler: {args.gamma}")
-    print(f"No. of time steps: {args.time_steps}")
+    print(f"Training steps: {args.total_steps}")
+    print(f"Warmup steps: {args.warmup_steps}")
+    print(f"Peak Learning Rate: {args.lr}")
+    print(f"No. of diffusion time steps: {args.time_steps}")
     print(f"Latent dimension: {args.d_model}")
     print(f"Beta start: {args.beta_start}")
     print(f"Beta end: {args.beta_end}")
@@ -38,7 +37,19 @@ def print_training_parameters(args, device):
     print(f"")
 
 
-def main():
+if __name__ == "__main__":
+
+    parser, args = get_args()
+
+    def lr_lambda(step):
+        if step < args.warmup_steps:
+            return float(step) / args.warmup_steps
+        else:
+            progress = float(step - args.warmup_steps) / float(
+                args.total_steps - args.warmup_steps
+            )
+            return max(1e-5, (0.5 * (1.0 + math.cos(math.pi * progress))))
+
     """
     main program starts here
     """
@@ -47,8 +58,6 @@ def main():
 
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
-
-    parser, args = get_args()
 
     torch.manual_seed(args.seed)
     args.train = True
@@ -95,8 +104,10 @@ def main():
             model = UNet(**model_kwargs).to(device)
 
         loss_criterion = nn.MSELoss()
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
-        scheduler = StepLR(optimizer, step_size=args.lr_steps, gamma=args.gamma)
+        # optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        # scheduler = StepLR(optimizer, step_size=args.lr_steps, gamma=args.gamma)
+        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+        scheduler = LambdaLR(optimizer, lr_lambda)
         grad_scaler = torch.amp.GradScaler(enabled=True)
         print("Model summary:")
         summary(model)
@@ -105,33 +116,53 @@ def main():
 
         # Run training loop
         losses = defaultdict(list)
-        for epoch in range(1, args.epochs + 1):
-            # train
-            avg_epoch_loss = train(
-                model,
-                device,
-                epoch,
-                optimizer,
-                train_loader,
-                loss_criterion,
-                grad_scaler,
-            )
-            losses["train"].append(avg_epoch_loss)
-            if args.enable_steplr and epoch <= 90:
+        current_step = 0
+        # train
+        while current_step < args.total_steps:
+            model.train()
+            total_loss = 0
+            for batch_idx, (xt, eps, t_embs, ts, labels) in enumerate(train_loader):
+                xt = xt.to(device)
+                eps = eps.to(device)
+                t_embs = t_embs.to(device)
+                labels = labels.to(device)
+                batch_size = xt.shape[0]
+                # use automatic mixed precision training
+                with torch.autocast(device.type, enabled=True):
+                    predicted_eps = model(xt, t_embs)
+                    loss = loss_criterion(predicted_eps, eps)
+                    avg_step_loss = 1e4 * loss.item() / batch_size
+                    losses["train"].append(avg_step_loss)
+                    # total_loss += loss.item() / batch_size
+                optimizer.zero_grad()
+                # scale gradients when doing backward pass, avoid vanishing gradients
+                grad_scaler.scale(loss).backward()
+                # unscale gradients before applying
+                grad_scaler.unscale_(optimizer)
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
                 scheduler.step()
-            if epoch % args.epoch_steps == 0:
-                save_plots(losses, results_dir, name="losses")
-                generate_images(
-                    5,
-                    5,
-                    model,
-                    gaussian_diffuser,
-                    inference_dir,
-                    device,
-                    name=f"samples_epoch_{epoch}",
-                )
+                current_step += 1
+
+                if current_step % args.logging_steps == 0:
+                    print(
+                        f"Step {current_step}/{args.total_steps}: Loss: {avg_step_loss:.5f}"
+                    )
+                    print(f"Step: {current_step}, LR: {scheduler.get_last_lr()[0]:.2e}")
+                    save_plots(losses, results_dir, name="losses")
+                    generate_images(
+                        5,
+                        5,
+                        model,
+                        gaussian_diffuser,
+                        inference_dir,
+                        device,
+                        name=f"samples_step_{current_step}",
+                    )
             if args.dry_run:
                 break
+
         # save model
         model_name = f"ddpm"
         if args.save_model:
@@ -152,7 +183,3 @@ def main():
         generate_images(
             2, 5, model, gaussian_diffuser, inference_dir, device, name=f"samples"
         )
-
-
-if __name__ == "__main__":
-    main()

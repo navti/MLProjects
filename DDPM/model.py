@@ -371,10 +371,6 @@ def train(model, device, epoch, optimizer, train_loader, loss_criterion, grad_sc
         # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
         grad_scaler.step(optimizer)
         grad_scaler.update()
-        # if batch_idx % 100 == 0:
-        #     print(
-        #         f"Avg loss after batch {batch_idx+1}/{len(train_loader)}: {(total_loss/(batch_idx+1)):.4f}"
-        #     )
     # draw(xt, ts, name="noisy_samples")
     avg_epoch_loss = total_loss / (batch_idx + 1)
     print(f"Epoch {epoch}: Loss: {10000*avg_epoch_loss:.5f}")

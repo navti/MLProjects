@@ -23,7 +23,7 @@ def get_args():
         type=int,
         default=1000,
         metavar="T",
-        help="no. of time steps. (default: 1000)",
+        help="no. of time steps for diffusion (default: 1000)",
     )
     parser.add_argument(
         "--beta-start",
@@ -45,50 +45,29 @@ def get_args():
         metavar="LR",
         type=float,
         default=1e-4,
-        help="Learning rate",
+        help="Peak Learning rate",
         dest="lr",
     )
     parser.add_argument(
-        "--gamma",
-        type=float,
-        default=1e-1,
-        metavar="G",
-        help="Learning rate factor gamma (default: 0.1)",
-    )
-    parser.add_argument(
-        "--lr-steps",
-        metavar="STEP_SIZE",
+        "--total-steps",
+        metavar="TS",
         type=int,
-        default=50,
-        help="Step size for step lr scheduler",
+        default=100_000,
+        help="Number of training steps",
     )
     parser.add_argument(
-        "--enable-steplr",
-        action="store_true",
-        default=False,
-        help="Enable step LR scheduler.",
+        "--warmup-steps",
+        metavar="WARMUP_STEPS",
+        type=int,
+        default=10_000,
+        help="Number of warmup steps",
     )
     parser.add_argument(
-        "--epochs",
-        "-e",
-        metavar="NUM_EPOCHS",
+        "--logging-steps",
+        metavar="LOG_STEPS",
         type=int,
         default=500,
-        help="Number of epochs",
-    )
-    parser.add_argument(
-        "--warmup",
-        metavar="WARMUP_EPOCHS",
-        type=int,
-        default=500,
-        help="Number of warmup epochs with initial lr",
-    )
-    parser.add_argument(
-        "--epoch-steps",
-        metavar="STEP_EPOCHS",
-        type=int,
-        default=50,
-        help="Number of epochs after which loss curve is updated and images are sampled",
+        help="Number of steps after which loss curve is updated and images are sampled",
     )
     parser.add_argument(
         "--batch-size",
@@ -96,7 +75,7 @@ def get_args():
         dest="batch_size",
         metavar="BATCH_SIZE",
         type=int,
-        default=64,
+        default=256,
         help="Batch size",
     )
     parser.add_argument(
