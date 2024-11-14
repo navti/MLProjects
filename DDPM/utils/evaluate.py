@@ -6,6 +6,8 @@ from utils.plotting import *
 import pathlib
 import time
 
+plt.switch_backend("agg")
+
 
 def generate_images(rows, cols, model, diffuser, inference_dir, device, name=None):
     """

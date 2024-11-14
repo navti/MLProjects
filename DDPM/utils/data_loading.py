@@ -65,7 +65,7 @@ class CIFARDataset(Dataset):
         if self.diffuser:
             x0 = image.unsqueeze(0)
             xt, eps, t_emb, ts = self.diffuser(x0)
-            return xt.squeeze(), eps.squeeze(), t_emb.squeeze(), ts, label
+            return xt.squeeze(), eps.squeeze(), t_emb.squeeze(), ts.squeeze(), label
         return image, label
 
 

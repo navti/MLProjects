@@ -4,6 +4,8 @@ import time
 import torch
 import math
 
+plt.switch_backend("agg")
+
 
 def save_plots(losses, results_dir, name=None):
     """
@@ -24,6 +26,7 @@ def save_plots(losses, results_dir, name=None):
         plt.plot(range(1, steps + 1), losses["train"], label="Train loss")
         # plt.plot(range(1, epochs + 1), losses["validation"], label="Validation loss")
         plt.ylabel("Loss")
+        plt.ylim(0, 5)
     else:
         plt.plot(range(1, steps + 1), losses["bleu"], label="BLEU score")
         plt.ylabel("Score")
