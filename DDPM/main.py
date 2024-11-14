@@ -8,7 +8,7 @@ import sys
 from collections import defaultdict
 from utils.data_loading import make_cifar_set
 from diffuser import GaussianDiffuser
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, SubsetRandomSampler
 from utils.evaluate import *
 from args import *
 
@@ -59,22 +59,22 @@ if __name__ == "__main__":
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    torch.manual_seed(args.seed)
-    args.train = True
+    # torch.manual_seed(args.seed)
+    # args.train = True
+    # args.train_subset = True
 
     model_kwargs = {}
     model_kwargs["n_channels"] = args.n_channels
     model_kwargs["n_classes"] = args.n_classes
     model_kwargs["d_model"] = args.d_model
     model_kwargs["nf"] = args.nf
-    model_kwargs["checkpointing"] = args.checkpointing
     model_kwargs["bilinear"] = args.bilinear
 
     results_dir = f"{proj_dir}/results"
     models_dir = f"{proj_dir}/model/saved_models"
     inference_dir = results_dir + "/generated"
 
-    if args.train:
+    if args.train or args.train_subset:
         train_kwargs = {"batch_size": args.batch_size}
         test_kwargs = {"batch_size": args.batch_size}
         validation_kwargs = {"batch_size": args.batch_size}
@@ -94,6 +94,14 @@ if __name__ == "__main__":
         T = args.time_steps
         gaussian_diffuser = GaussianDiffuser(betas=betas, T=T)
         trainset = make_cifar_set(data_dir=cifar_data_dir, diffuser=gaussian_diffuser)
+
+        if args.train_subset:
+            subset_size = int(0.01 * len(trainset))
+            indices = torch.arange(len(trainset))
+            subset_indices = indices[:subset_size]
+            subset_sampler = SubsetRandomSampler(subset_indices)
+            train_kwargs.update({"sampler": subset_sampler, "shuffle": False})
+
         train_loader = DataLoader(trainset, **train_kwargs)
 
         if args.load != None:
@@ -102,6 +110,7 @@ if __name__ == "__main__":
             model = load_model(args.load, **model_kwargs).to(device)
         else:
             model = UNet(**model_kwargs).to(device)
+            # model = UNet2(nf=args.nf).to(device)
 
         loss_criterion = nn.MSELoss()
         # optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -142,6 +151,7 @@ if __name__ == "__main__":
                 # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
+
                 scheduler.step()
                 current_step += 1
 
@@ -152,8 +162,8 @@ if __name__ == "__main__":
                     print(f"Step: {current_step}, LR: {scheduler.get_last_lr()[0]:.2e}")
                     save_plots(losses, results_dir, name="losses")
                     generate_images(
-                        5,
-                        5,
+                        10,
+                        10,
                         model,
                         gaussian_diffuser,
                         inference_dir,
@@ -169,8 +179,6 @@ if __name__ == "__main__":
             save_model(model, models_dir, name=model_name)
 
     else:
-        # enable block checkpointing
-        # model_kwargs["checkpointing"] = True
         model = load_model(args.load, **model_kwargs)
         if model == None:
             print("Check if the correct model path was provided to load from.")
@@ -181,5 +189,5 @@ if __name__ == "__main__":
         gaussian_diffuser = GaussianDiffuser(betas=betas, T=T)
         model = model.to(device)
         generate_images(
-            2, 5, model, gaussian_diffuser, inference_dir, device, name=f"samples"
+            16, 16, model, gaussian_diffuser, inference_dir, device, name=f"samples"
         )

@@ -86,6 +86,12 @@ def get_args():
         help="Train model with given parameters.",
     )
     parser.add_argument(
+        "--train-subset",
+        action="store_true",
+        default=False,
+        help="Train model with 1% of dataset.",
+    )
+    parser.add_argument(
         "--nf", type=int, default=32, metavar="NF", help="no. of filters (default: 32)"
     )
     parser.add_argument(
