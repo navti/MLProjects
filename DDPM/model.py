@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.nn import init
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 import pathlib
@@ -7,48 +8,69 @@ import time
 from utils.plotting import *
 import os
 from utils.data_loading import make_cifar_set
-from diffuser import GaussianDiffuser
+from diffuser import *
 from torch.utils.data import DataLoader
 
 
 """ Parts of the U-Net model """
 
 
+class ResBlock(nn.Module):
+    def __init__(self, in_c, d_model=256, dropout=0.1, Activation=nn.ReLU):
+        super().__init__()
+        self.activation = nn.Identity() if Activation == None else Activation()
+        self.block1 = nn.Sequential(
+            nn.Conv2d(in_c, in_c, 3, stride=1, padding=1),
+            nn.BatchNorm2d(in_c),
+            self.activation,
+        )
+        self.temb_proj = nn.Sequential(
+            nn.Linear(d_model, in_c),
+            self.activation,
+        )
+        self.block2 = nn.Sequential(
+            nn.Conv2d(in_c, in_c, 3, stride=1, padding=1),
+            nn.Identity() if Activation == None else nn.BatchNorm2d(in_c),
+            nn.Identity() if Activation == None else nn.Dropout(dropout),
+        )
+
+    def forward(self, x, t_emb):
+        h = self.block1(x)
+        h = h + self.temb_proj(t_emb)[:, :, None, None]
+        h = self.block2(h)
+        h = h + x
+        h = self.activation(h)
+        return h
+
+
 class DoubleConv(nn.Module):
     """(conv => [BN] => ReLU) * 2"""
 
-    def __init__(self, in_channels, out_channels, mid_channels=None, activations=True):
+    def __init__(
+        self, in_c, out_c, mid_c=None, d_model=256, dropout=0.1, Activation=nn.ReLU
+    ):
         super(DoubleConv, self).__init__()
-        if not mid_channels:
-            mid_channels = out_channels
-        if activations:
-            self.double_conv = nn.Sequential(
-                nn.Conv2d(
-                    in_channels, mid_channels, kernel_size=3, padding=1, bias=False
-                ),
-                nn.BatchNorm2d(mid_channels),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(
-                    mid_channels, out_channels, kernel_size=3, padding=1, bias=False
-                ),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True),
-            )
-        else:
-            self.double_conv = nn.Sequential(
-                nn.Conv2d(
-                    in_channels, mid_channels, kernel_size=3, padding=1, bias=False
-                ),
-                nn.BatchNorm2d(mid_channels),
-                # nn.ReLU(inplace=True),
-                nn.Conv2d(
-                    mid_channels, out_channels, kernel_size=3, padding=1, bias=False
-                ),
-                # nn.BatchNorm2d(out_channels),
-            )
+        if not mid_c:
+            mid_c = out_c
+        activation = nn.Identity() if Activation == None else Activation()
+        self.temb_proj = nn.Sequential(
+            nn.Linear(d_model, out_c),
+            activation,
+        )
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(in_c, mid_c, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_c),
+            activation,
+            nn.Conv2d(mid_c, out_c, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_c),
+            activation,
+        )
+        self.res = ResBlock(out_c, d_model, dropout=dropout, Activation=Activation)
 
-    def forward(self, x):
-        return self.double_conv(x)
+    def forward(self, x, t_emb):
+        t = self.temb_proj(t_emb)[:, :, None, None]
+        x = self.double_conv(x) + t
+        return self.res(x, t_emb)
 
 
 class Down(nn.Module):
@@ -65,14 +87,14 @@ class Down(nn.Module):
 class DownDoubleConv(nn.Module):
     """Downscaling with maxpool then double conv"""
 
-    def __init__(self, in_channels, out_channels, activations=True):
+    def __init__(self, in_c, out_c, Activation=nn.ReLU):
         super(DownDoubleConv, self).__init__()
-        self.down_doubleconv = nn.Sequential(
-            Down(), DoubleConv(in_channels, out_channels, activations=activations)
-        )
+        self.down = Down()
+        self.double_conv = DoubleConv(in_c, out_c, Activation=Activation)
 
-    def forward(self, x):
-        return self.down_doubleconv(x)
+    def forward(self, x, t_emb):
+        x = self.down(x)
+        return self.double_conv(x, t_emb)
 
 
 class UpDoubleConv(nn.Module):
@@ -80,10 +102,10 @@ class UpDoubleConv(nn.Module):
 
     def __init__(
         self,
-        in_channels,
-        out_channels,
+        in_c,
+        out_c,
         bilinear=False,
-        activations=True,
+        Activation=nn.ReLU,
         kernel_size=4,
         stride=2,
         padding=1,
@@ -93,44 +115,32 @@ class UpDoubleConv(nn.Module):
         # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            self.double_conv = DoubleConv(
-                in_channels, out_channels, in_channels // 2, activations=activations
-            )
+            self.double_conv = DoubleConv(in_c, out_c, in_c // 2, Activation=Activation)
         else:
             self.up = nn.ConvTranspose2d(
-                in_channels,
-                in_channels // 2,
+                in_c,
+                in_c // 2,
                 kernel_size=kernel_size,
                 stride=stride,
                 padding=padding,
             )
             self.double_conv = DoubleConv(
-                (out_channels + in_channels // 2), out_channels, activations=activations
+                (out_c + in_c // 2), out_c, Activation=Activation
             )
 
-    def forward(self, x1, x2):
+    def forward(self, x1, x2, t_emb):
         x1 = self.up(x1)
         # input is BCHW
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
-
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
         x = torch.cat([x2, x1], dim=1)
-        return self.double_conv(x)
-
-
-class OutConv(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(OutConv, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
-
-    def forward(self, x):
-        return self.conv(x)
+        return self.double_conv(x, t_emb)
 
 
 class UNet(nn.Module):
     """
-    args list: n_channels=3, n_classes=10, d_model=256, nf=8, checkpointing=False, bilinear=False
+    args list: n_channels=3, n_classes=10, d_model=256, nf=8, bilinear=False
 
     """
 
@@ -154,11 +164,6 @@ class UNet(nn.Module):
         self.nf = (
             kwargs.get("nf") if "nf" in kwargs else args[3] if len(args) >= 4 else 8
         )
-        self.checkpointing = (
-            kwargs.get("checkpointing")
-            if "checkpointing" in kwargs
-            else args[4] if len(args) >= 5 else True
-        )
         self.bilinear = (
             kwargs.get("bilinear")
             if "bilinear" in kwargs
@@ -169,19 +174,7 @@ class UNet(nn.Module):
         n_channels = self.n_channels
         nf = self.nf
 
-        self.time_down_proj1 = nn.Linear(d_model, 32 * 32)
-        self.time_down_proj2 = nn.Linear(d_model, 16 * 16)
-        self.time_down_proj3 = nn.Linear(d_model, 8 * 8)
-        self.time_down_proj4 = nn.Linear(d_model, 4 * 4)
-        self.time_down_proj5 = nn.Linear(d_model, 2 * 2)
-
-        # self.time_up_proj1 = nn.Linear(d_model, 32 * 32)
-        # self.time_up_proj2 = nn.Linear(d_model, 16 * 16)
-        # self.time_up_proj3 = nn.Linear(d_model, 8 * 8)
-        # self.time_up_proj4 = nn.Linear(d_model, 4 * 4)
-        # self.time_up_proj5 = nn.Linear(d_model, 2 * 2)
-
-        self.inc = DoubleConv(n_channels, nf)
+        self.head = DoubleConv(n_channels, nf)
         self.down1 = DownDoubleConv(nf, 2 * nf)
         self.down2 = DownDoubleConv(2 * nf, 4 * nf)
         self.down3 = DownDoubleConv(4 * nf, 8 * nf)
@@ -193,105 +186,22 @@ class UNet(nn.Module):
         self.up3 = UpDoubleConv(8 * nf, 4 * nf)
         self.up4 = UpDoubleConv(4 * nf, 2 * nf)
         self.up5 = UpDoubleConv(2 * nf, nf)
-        self.double_conv1 = DoubleConv(n_channels, n_channels + 1)
-        self.up6 = UpDoubleConv(
-            nf, n_channels, activations=False, kernel_size=3, stride=1, padding=1
-        )
+        self.tail = UpDoubleConv(nf, n_channels, False, None, 3, 1, 1)
 
     def forward(self, x, t_emb):
-        B = x.shape[0]
-        if self.checkpointing:
-            x1 = checkpoint(self.inc, x, use_reentrant=False)
-            t1_down = checkpoint(self.time_down_proj1, t_emb, use_reentrant=False)
-            x1 = x1 + t1_down.view(size=(B, 1, *x1.shape[-2:]))
+        x1 = self.head(x, t_emb)
+        x2 = self.down1(x1, t_emb)
+        x3 = self.down2(x2, t_emb)
+        x4 = self.down3(x3, t_emb)
+        x5 = self.down4(x4, t_emb)
+        x6 = self.down5(x5, t_emb)
 
-            x2 = checkpoint(self.down1, x1, use_reentrant=False)
-            t2_down = checkpoint(self.time_down_proj2, t_emb, use_reentrant=False)
-            x2 = x2 + t2_down.view(size=(B, 1, *x2.shape[-2:]))
-
-            x3 = checkpoint(self.down2, x2, use_reentrant=False)
-            t3_down = checkpoint(self.time_down_proj3, t_emb, use_reentrant=False)
-            x3 = x3 + t3_down.view(size=(B, 1, *x3.shape[-2:]))
-
-            x4 = checkpoint(self.down3, x3, use_reentrant=False)
-            t4_down = checkpoint(self.time_down_proj4, t_emb, use_reentrant=False)
-            x4 = x4 + t4_down.view(size=(B, 1, *x4.shape[-2:]))
-
-            x5 = checkpoint(self.down4, x4, use_reentrant=False)
-            t5_down = checkpoint(self.time_down_proj5, t_emb, use_reentrant=False)
-            x5 = x5 + t5_down.view(size=(B, 1, *x5.shape[-2:]))
-
-            x6 = checkpoint(self.down5, x5, use_reentrant=False)
-            x6 = x6 + t_emb[:, :, None, None]
-
-            y = checkpoint(self.up1, x6, x5, use_reentrant=False)
-            # t5_up = checkpoint(self.time_up_proj5, t_emb, use_reentrant=False)
-            y = y + t5_down.view(size=(B, 1, *y.shape[-2:]))
-
-            y = checkpoint(self.up2, y, x4, use_reentrant=False)
-            # t4_up = checkpoint(self.time_up_proj4, t_emb, use_reentrant=False)
-            y = y + t4_down.view(size=(B, 1, *y.shape[-2:]))
-
-            y = checkpoint(self.up3, y, x3, use_reentrant=False)
-            # t3_up = checkpoint(self.time_up_proj3, t_emb, use_reentrant=False)
-            y = y + t3_down.view(size=(B, 1, *y.shape[-2:]))
-
-            y = checkpoint(self.up4, y, x2, use_reentrant=False)
-            # t2_up = checkpoint(self.time_up_proj2, t_emb, use_reentrant=False)
-            y = y + t2_down.view(size=(B, 1, *y.shape[-2:]))
-
-            y = checkpoint(self.up5, y, x1, use_reentrant=False)
-            # t1_up = checkpoint(self.time_up_proj1, t_emb, use_reentrant=False)
-            y = y + t1_down.view(size=(B, 1, *y.shape[-2:]))
-
-            y = checkpoint(self.up6, y, x, use_reentrant=False)
-
-            return y
-
-        x1 = self.inc(x)
-        t1_down = self.time_down_proj1(t_emb)
-        x1 = x1 + t1_down.view(size=(B, 1, *x1.shape[-2:]))
-
-        x2 = self.down1(x1)
-        t2_down = self.time_down_proj2(t_emb)
-        x2 = x2 + t2_down.view(size=(B, 1, *x2.shape[-2:]))
-
-        x3 = self.down2(x2)
-        t3_down = self.time_down_proj3(t_emb)
-        x3 = x3 + t3_down.view(size=(B, 1, *x3.shape[-2:]))
-
-        x4 = self.down3(x3)
-        t4_down = self.time_down_proj4(t_emb)
-        x4 = x4 + t4_down.view(size=(B, 1, *x4.shape[-2:]))
-
-        x5 = self.down4(x4)
-        t5_down = self.time_down_proj5(t_emb)
-        x5 = x5 + t5_down.view(size=(B, 1, *x5.shape[-2:]))
-
-        x6 = self.down5(x5)
-        x6 = x6 + t_emb[:, :, None, None]
-
-        y = self.up1(x6, x5)
-        # t5_up = self.time_up_proj5(t_emb)
-        y = y + t5_down.view(size=(B, 1, *y.shape[-2:]))
-
-        y = self.up2(y, x4)
-        # t4_up = self.time_up_proj4(t_emb)
-        y = y + t4_down.view(size=(B, 1, *y.shape[-2:]))
-
-        y = self.up3(y, x3)
-        # t3_up = self.time_up_proj3(t_emb)
-        y = y + t3_down.view(size=(B, 1, *y.shape[-2:]))
-
-        y = self.up4(y, x2)
-        # t2_up = self.time_up_proj2(t_emb)
-        y = y + t2_down.view(size=(B, 1, *y.shape[-2:]))
-
-        y = self.up5(y, x1)
-        # t1_up = self.time_up_proj1(t_emb)
-        y = y + t1_down.view(size=(B, 1, *y.shape[-2:]))
-
-        y = self.up6(y, x)
+        y = self.up1(x6, x5, t_emb)
+        y = self.up2(y, x4, t_emb)
+        y = self.up3(y, x3, t_emb)
+        y = self.up4(y, x2, t_emb)
+        y = self.up5(y, x1, t_emb)
+        y = self.tail(y, x, t_emb)
 
         return y
 
@@ -337,46 +247,6 @@ def load_model(model_path, *args, **kwargs):
     return model
 
 
-def train(model, device, epoch, optimizer, train_loader, loss_criterion, grad_scaler):
-    """
-    Train model
-    :param model: model to train
-    :param device: device on which model should be trained
-    :param epoch: current epoch number
-    :param optimizer: optimizer
-    :param train_loader: loader to load training data from
-    :param loss_criterion: loss function to be used
-    :param grad_scaler: gradient scaler to be used with amp
-    :return:
-        avg_epoch_loss: avg loss for current epoch
-    """
-    model.train()
-    total_loss = 0
-    for batch_idx, (xt, eps, t_embs, ts, labels) in enumerate(train_loader):
-        xt = xt.to(device)
-        eps = eps.to(device)
-        t_embs = t_embs.to(device)
-        labels = labels.to(device)
-        batch_size = xt.shape[0]
-        # use automatic mixed precision training
-        with torch.autocast(device.type, enabled=True):
-            predicted_eps = model(xt, t_embs)
-            loss = loss_criterion(predicted_eps, eps)
-            total_loss += loss.item() / batch_size
-        optimizer.zero_grad()
-        # scale gradients when doing backward pass, avoid vanishing gradients
-        grad_scaler.scale(loss).backward()
-        # unscale gradients before applying
-        grad_scaler.unscale_(optimizer)
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
-        grad_scaler.step(optimizer)
-        grad_scaler.update()
-    # draw(xt, ts, name="noisy_samples")
-    avg_epoch_loss = total_loss / (batch_idx + 1)
-    print(f"Epoch {epoch}: Loss: {10000*avg_epoch_loss:.5f}")
-    return 10000 * avg_epoch_loss
-
-
 if __name__ == "__main__":
     cifar_data_dir = os.path.abspath("./data")
     gaussian_diffuser = GaussianDiffuser()
@@ -385,9 +255,7 @@ if __name__ == "__main__":
     n_channels = 3
     n_classes = 10
     nf = 8
-    test_model = UNet(
-        n_channels=n_channels, n_classes=n_classes, nf=nf, checkpointing=True
-    )
-    xt, eps, t_embs, labels = next(iter(train_loader))
+    test_model = UNet(n_channels=n_channels, n_classes=n_classes, nf=nf)
+    xt, eps, t_embs, ts, labels = next(iter(train_loader))
     out = test_model(xt, t_embs)
     print(f"{out.shape}")
