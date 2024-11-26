@@ -63,6 +63,7 @@ class DoubleConv(nn.Module):
             activation,
             nn.Conv2d(mid_c, out_c, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_c),
+            nn.Dropout(dropout),
             activation,
         )
         self.res = ResBlock(out_c, d_model, dropout=dropout, Activation=Activation)

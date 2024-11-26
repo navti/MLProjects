@@ -25,9 +25,12 @@ def merge_dicts(dicts: list) -> dict:
     return {"data": data, "labels": labels}
 
 
-def get_cifar_data(data_dir):
+def get_cifar_data(data_dir, test=False):
     data_dir = os.path.abspath(data_dir)
-    batch_files = glob.glob(f"{data_dir}/**/*_batch_*", recursive=True)
+    if test:
+        batch_files = glob.glob(f"{data_dir}/**/test_batch", recursive=True)
+    else:
+        batch_files = glob.glob(f"{data_dir}/**/*_batch_*", recursive=True)
     data_dicts = list(map(unpickle, batch_files))
     data_dict = merge_dicts(data_dicts)
     imgs = data_dict["data"]
@@ -48,9 +51,9 @@ class CIFARDataset(Dataset):
     Make CIFAR dataset
     """
 
-    def __init__(self, data_dir, diffuser=None, image_transforms=None):
+    def __init__(self, data_dir, diffuser=None, image_transforms=None, test=False):
         super(CIFARDataset, self).__init__()
-        self.images, self.labels = get_cifar_data(data_dir)
+        self.images, self.labels = get_cifar_data(data_dir, test)
         self.image_transforms = image_transforms
         self.diffuser = diffuser
 
@@ -72,10 +75,11 @@ class CIFARDataset(Dataset):
 def make_cifar_set(data_dir="../data/", diffuser=None):
     image_transforms = transforms.Compose(
         [
-            transforms.ToTensor(),
-            # transforms.Resize((256, 256)),
+            # transforms.ToTensor(),
+            transforms.RandomHorizontalFlip(),
             # transforms.Normalize()
         ]
     )
-    cifar_set = CIFARDataset(data_dir, diffuser)
-    return cifar_set
+    train_set = CIFARDataset(data_dir, diffuser, image_transforms)
+    test_set = CIFARDataset(data_dir, None, image_transforms, test=True)
+    return train_set, test_set

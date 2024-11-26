@@ -77,29 +77,30 @@ class GaussianDiffuser(object):
     def sample(self, model, size, device="cpu"):
         # size: BCHW
         model.eval()
-        batch_size = size[0]
-        xt = torch.randn(size=size)
-        ts = torch.tensor(list(range(self.T, 0, -1)))
-        for t in ts:
-            t_emb = self.time_embedding(t)
-            t_emb = t_emb.expand(batch_size, -1)
-            xt = xt.to(device)
-            t_emb = t_emb.to(device)
-            eps = model(xt, t_emb)
-            factor = self.betas[t] / torch.sqrt(1 - self.alphas_bar[t])
-            mean_t_bar = (xt - eps * factor) / torch.sqrt(self.alphas[t])
-            sigma_t = torch.sqrt(self.betas[t])
-            z = torch.randn_like(mean_t_bar)
-            if t == 1:
-                x0 = torch.clamp(mean_t_bar, min=-1.0, max=1.0)
-                x0 = (x0 + 1) / 2
-                return x0
-            xt_1 = mean_t_bar + sigma_t * z
-            # clear gpu tensors
-            del xt, t_emb, eps, mean_t_bar, z
-            xt = xt_1.detach().clone()
-            del xt_1
-            torch.cuda.empty_cache()
+        with torch.no_grad():
+            batch_size = size[0]
+            xt = torch.randn(size=size)
+            ts = torch.tensor(list(range(self.T, 0, -1)))
+            for t in ts:
+                t_emb = self.time_embedding(t)
+                t_emb = t_emb.expand(batch_size, -1)
+                xt = xt.to(device)
+                t_emb = t_emb.to(device)
+                eps = model(xt, t_emb)
+                factor = self.betas[t] / torch.sqrt(1 - self.alphas_bar[t])
+                mean_t_bar = (xt - eps * factor) / torch.sqrt(self.alphas[t])
+                sigma_t = torch.sqrt(self.betas[t])
+                z = torch.randn_like(mean_t_bar)
+                if t == 1:
+                    x0 = torch.clamp(mean_t_bar, min=-1.0, max=1.0)
+                    x0 = (x0 + 1) / 2
+                    return x0
+                xt_1 = mean_t_bar + sigma_t * z
+                # clear gpu tensors
+                del xt, t_emb, eps, mean_t_bar, z
+                xt = xt_1.detach().clone()
+                del xt_1
+                torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

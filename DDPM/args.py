@@ -44,7 +44,7 @@ def get_args():
         "-l",
         metavar="LR",
         type=float,
-        default=1e-4,
+        default=2e-4,
         help="Peak Learning rate",
         dest="lr",
     )
@@ -52,7 +52,7 @@ def get_args():
         "--total-steps",
         metavar="TS",
         type=int,
-        default=100_000,
+        default=200_000,
         help="Number of training steps",
     )
     parser.add_argument(
@@ -66,7 +66,7 @@ def get_args():
         "--logging-steps",
         metavar="LOG_STEPS",
         type=int,
-        default=500,
+        default=1000,
         help="Number of steps after which loss curve is updated and images are sampled",
     )
     parser.add_argument(

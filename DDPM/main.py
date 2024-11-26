@@ -2,15 +2,17 @@ import torch
 from torch import optim
 from torch import nn
 from torchinfo import summary
-from torch.optim.lr_scheduler import StepLR, LambdaLR
+from torch.optim.lr_scheduler import LambdaLR
 from model import *
 import sys
 from collections import defaultdict
 from utils.data_loading import make_cifar_set
 from diffuser import GaussianDiffuser
 from torch.utils.data import DataLoader, SubsetRandomSampler
+from torch.utils.data.dataset import random_split
 from utils.evaluate import *
 from args import *
+from utils.metrics_fid import fid_score
 
 torch.set_float32_matmul_precision("high")
 
@@ -59,7 +61,7 @@ if __name__ == "__main__":
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    # torch.manual_seed(args.seed)
+    torch.manual_seed(args.seed)
     # args.train = True
     # args.train_subset = True
 
@@ -93,8 +95,10 @@ if __name__ == "__main__":
         betas = [args.beta_start, args.beta_end]
         T = args.time_steps
         gaussian_diffuser = GaussianDiffuser(betas=betas, T=T)
-        trainset = make_cifar_set(data_dir=cifar_data_dir, diffuser=gaussian_diffuser)
-
+        train_set, test_set = make_cifar_set(
+            data_dir=cifar_data_dir, diffuser=gaussian_diffuser
+        )
+        trainset, validation_set = random_split(train_set, [0.9, 0.1])
         if args.train_subset:
             subset_size = int(0.01 * len(trainset))
             indices = torch.arange(len(trainset))
@@ -102,19 +106,18 @@ if __name__ == "__main__":
             subset_sampler = SubsetRandomSampler(subset_indices)
             train_kwargs.update({"sampler": subset_sampler, "shuffle": False})
 
+        # data loaders
         train_loader = DataLoader(trainset, **train_kwargs)
-
+        val_loader = DataLoader(validation_set, **validation_kwargs)
+        test_loader = DataLoader(test_set, **test_kwargs)
         if args.load != None:
             print(f"Training existing model.")
             print(f"Loading model from the given path: {args.load}")
             model = load_model(args.load, **model_kwargs).to(device)
         else:
             model = UNet(**model_kwargs).to(device)
-            # model = UNet2(nf=args.nf).to(device)
 
         loss_criterion = nn.MSELoss()
-        # optimizer = optim.Adam(model.parameters(), lr=args.lr)
-        # scheduler = StepLR(optimizer, step_size=args.lr_steps, gamma=args.gamma)
         optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
         scheduler = LambdaLR(optimizer, lr_lambda)
         grad_scaler = torch.amp.GradScaler(enabled=True)
@@ -124,13 +127,13 @@ if __name__ == "__main__":
         print_training_parameters(args, device)
 
         # Run training loop
-        losses = defaultdict(list)
+        losses = {"train": [[], []]}
+        losses.update({"validation": [[], []]})
         current_step = 0
         # train
         while current_step < args.total_steps:
-            model.train()
-            total_loss = 0
             for batch_idx, (xt, eps, t_embs, ts, labels) in enumerate(train_loader):
+                model.train()
                 xt = xt.to(device)
                 eps = eps.to(device)
                 t_embs = t_embs.to(device)
@@ -141,8 +144,6 @@ if __name__ == "__main__":
                     predicted_eps = model(xt, t_embs)
                     loss = loss_criterion(predicted_eps, eps)
                     avg_step_loss = 1e4 * loss.item() / batch_size
-                    losses["train"].append(avg_step_loss)
-                    # total_loss += loss.item() / batch_size
                 optimizer.zero_grad()
                 # scale gradients when doing backward pass, avoid vanishing gradients
                 grad_scaler.scale(loss).backward()
@@ -151,15 +152,27 @@ if __name__ == "__main__":
                 # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
-
                 scheduler.step()
-                current_step += 1
 
+                current_step += 1
+                losses["train"][0].append(avg_step_loss)
+                losses["train"][1].append(current_step)
                 if current_step % args.logging_steps == 0:
+                    val_loss = validate_model(model, val_loader, device, loss_criterion)
+                    losses["validation"][0].append(val_loss)
+                    losses["validation"][1].append(current_step)
+
+                    # fid = fid_score(test_set, model, gaussian_diffuser, device)
+                    # losses["fid"][0].append(fid)
+                    # losses["fid"][1].append(current_step)
+
                     print(
-                        f"Step {current_step}/{args.total_steps}: Loss: {avg_step_loss:.5f}"
+                        f"Step {current_step}/{args.total_steps}:\n\tTrain Loss: {avg_step_loss:.5f}, \tVal Loss: {val_loss:.5f}"
                     )
-                    print(f"Step: {current_step}, LR: {scheduler.get_last_lr()[0]:.2e}")
+                    print(
+                        f"\tStep: {current_step}, LR: {scheduler.get_last_lr()[0]:.2e}"
+                    )
+                    print(f"=========================")
                     save_plots(losses, results_dir, name="losses")
                     generate_images(
                         10,

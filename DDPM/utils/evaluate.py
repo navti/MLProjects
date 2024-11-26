@@ -42,3 +42,19 @@ def generate_images(rows, cols, model, diffuser, inference_dir, device, name=Non
     fig.subplots_adjust(hspace=0, wspace=0)
     plt.savefig(save_fig_path, facecolor="w", edgecolor="none")
     plt.close(fig)
+
+
+def validate_model(model, val_loader, device, loss_criterion):
+    model.eval()
+    total_loss = 0
+    for batch_idx, (xt, eps, t_embs, ts, labels) in enumerate(val_loader):
+        xt = xt.to(device)
+        eps = eps.to(device)
+        t_embs = t_embs.to(device)
+        labels = labels.to(device)
+        batch_size = xt.shape[0]
+        predicted_eps = model(xt, t_embs)
+        loss = loss_criterion(predicted_eps, eps)
+        avg_step_loss = 1e4 * loss.item() / batch_size
+        total_loss += avg_step_loss
+    return total_loss / (batch_idx + 1)
