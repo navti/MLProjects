@@ -16,132 +16,128 @@ from torch.utils.data import DataLoader
 
 
 class ResBlock(nn.Module):
-    def __init__(self, in_c, d_model=256, dropout=0.1, Activation=nn.ReLU):
+    def __init__(self, in_c, out_c, t_dim=256, dropout=0.1, Activation=nn.ReLU):
         super().__init__()
-        self.activation = nn.Identity() if Activation == None else Activation()
+        groups = 32 if in_c % 32 == 0 else 1
+        activation = nn.Identity() if Activation == None else Activation()
         self.block1 = nn.Sequential(
-            nn.Conv2d(in_c, in_c, 3, stride=1, padding=1),
+            # nn.GroupNorm(groups, in_c),
             nn.BatchNorm2d(in_c),
-            self.activation,
+            activation,
+            nn.Conv2d(in_c, out_c, 3, stride=1, padding=1),
         )
         self.temb_proj = nn.Sequential(
-            nn.Linear(d_model, in_c),
-            self.activation,
+            nn.Linear(t_dim, out_c),
         )
         self.block2 = nn.Sequential(
-            nn.Conv2d(in_c, in_c, 3, stride=1, padding=1),
-            nn.Identity() if Activation == None else nn.BatchNorm2d(in_c),
-            nn.Identity() if Activation == None else nn.Dropout(dropout),
+            # nn.GroupNorm(groups, out_c),
+            nn.BatchNorm2d(out_c),
+            activation,
+            nn.Dropout(dropout),
+            nn.Conv2d(out_c, out_c, 3, stride=1, padding=1),
         )
+        # skip connection with conv if in_c is not same as out_c
+        self.skip_conv = nn.Conv2d(in_c, out_c, 1) if in_c != out_c else nn.Identity()
 
     def forward(self, x, t_emb):
         h = self.block1(x)
         h = h + self.temb_proj(t_emb)[:, :, None, None]
         h = self.block2(h)
-        h = h + x
-        h = self.activation(h)
+        h = h + self.skip_conv(x)
         return h
-
-
-class DoubleConv(nn.Module):
-    """(conv => [BN] => ReLU) * 2"""
-
-    def __init__(
-        self, in_c, out_c, mid_c=None, d_model=256, dropout=0.1, Activation=nn.ReLU
-    ):
-        super(DoubleConv, self).__init__()
-        if not mid_c:
-            mid_c = out_c
-        activation = nn.Identity() if Activation == None else Activation()
-        self.temb_proj = nn.Sequential(
-            nn.Linear(d_model, out_c),
-            activation,
-        )
-        self.double_conv = nn.Sequential(
-            nn.Conv2d(in_c, mid_c, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(mid_c),
-            activation,
-            nn.Conv2d(mid_c, out_c, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_c),
-            nn.Dropout(dropout),
-            activation,
-        )
-        self.res = ResBlock(out_c, d_model, dropout=dropout, Activation=Activation)
-
-    def forward(self, x, t_emb):
-        t = self.temb_proj(t_emb)[:, :, None, None]
-        x = self.double_conv(x) + t
-        return self.res(x, t_emb)
 
 
 class Down(nn.Module):
     """Downscaling with maxpool"""
 
-    def __init__(self):
+    def __init__(self, in_c):
         super(Down, self).__init__()
-        self.down = nn.MaxPool2d(2)
+        self.down = nn.Conv2d(in_c, in_c, 4, 2, 1)
 
     def forward(self, x):
         return self.down(x)
 
 
-class DownDoubleConv(nn.Module):
-    """Downscaling with maxpool then double conv"""
-
-    def __init__(self, in_c, out_c, Activation=nn.ReLU):
-        super(DownDoubleConv, self).__init__()
-        self.down = Down()
-        self.double_conv = DoubleConv(in_c, out_c, Activation=Activation)
+class ResDown(nn.Module):
+    def __init__(self, in_c, out_c, t_dim=256, dropout=0.1, Activation=nn.ReLU):
+        super(ResDown, self).__init__()
+        self.res1 = ResBlock(in_c, out_c, t_dim, dropout, Activation)
+        self.res2 = ResBlock(out_c, out_c, t_dim, dropout, Activation)
+        self.down = Down(out_c)
 
     def forward(self, x, t_emb):
+        x = self.res1(x, t_emb)
+        x = self.res2(x, t_emb)
         x = self.down(x)
-        return self.double_conv(x, t_emb)
+        return x
 
 
-class UpDoubleConv(nn.Module):
+class Bottleneck(nn.Module):
+    def __init__(self, in_c, out_c, t_dim=256, dropout=0.1, Activation=nn.ReLU):
+        super(Bottleneck, self).__init__()
+        self.res1 = ResBlock(in_c, out_c, t_dim, dropout, Activation)
+        self.res2 = ResBlock(out_c, out_c, t_dim, dropout, Activation)
+
+    def forward(self, x, t_emb):
+        x = self.res1(x, t_emb)
+        x = self.res2(x, t_emb)
+        return x
+
+
+class Up(nn.Module):
+    def __init__(self, in_c, out_c, Activation=nn.ReLU):
+        super(Up, self).__init__()
+        activation = nn.Identity() if Activation == None else Activation()
+        self.up_sample = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(in_c, out_c, 3, 1, 1),
+            nn.BatchNorm2d(out_c),
+            activation,
+        )
+
+    def forward(self, x):
+        x = self.up_sample(x)
+        return x
+
+
+class UpRes(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(
-        self,
-        in_c,
-        out_c,
-        bilinear=False,
-        Activation=nn.ReLU,
-        kernel_size=4,
-        stride=2,
-        padding=1,
-    ):
-        super(UpDoubleConv, self).__init__()
-
-        # if bilinear, use the normal convolutions to reduce the number of channels
-        if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            self.double_conv = DoubleConv(in_c, out_c, in_c // 2, Activation=Activation)
-        else:
-            self.up = nn.ConvTranspose2d(
-                in_c,
-                in_c // 2,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-            )
-            self.double_conv = DoubleConv(
-                (out_c + in_c // 2), out_c, Activation=Activation
-            )
+    def __init__(self, in_c, out_c, t_dim=256, dropout=0.1, Activation=nn.ReLU):
+        super(UpRes, self).__init__()
+        self.up = Up(in_c, out_c, Activation=Activation)
+        self.res1 = ResBlock(in_c + out_c, out_c, t_dim, dropout, Activation)
+        self.res2 = ResBlock(out_c, out_c, t_dim, dropout, Activation)
 
     def forward(self, x1, x2, t_emb):
         x1 = self.up(x1)
         # input is BCHW
-        diffY = x2.size()[2] - x1.size()[2]
-        diffX = x2.size()[3] - x1.size()[3]
-        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
+        diffY = x1.size()[2] - x2.size()[2]
+        diffX = x1.size()[3] - x2.size()[3]
+        x2 = F.pad(x2, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
         x = torch.cat([x2, x1], dim=1)
-        return self.double_conv(x, t_emb)
+        x = self.res1(x, t_emb)
+        x = self.res2(x, t_emb)
+        return x
+
+
+class FinalConv(nn.Module):
+    def __init__(self, in_c, out_c):
+        super(FinalConv, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_c, out_c, 3, 1, 1),
+            # nn.BatchNorm2d(mid_c),
+            # nn.ReLU(),
+            # nn.Conv2d(mid_c, out_c, 3, 1, 1),
+        )
+
+    def forward(self, x):
+        return self.conv(x)
 
 
 class UNet(nn.Module):
     """
-    args list: n_channels=3, n_classes=10, d_model=256, nf=8, bilinear=False
+    args list: n_channels=3, n_classes=10, t_dim=256, nf=8, bilinear=False
 
     """
 
@@ -157,13 +153,13 @@ class UNet(nn.Module):
             if "n_classes" in kwargs
             else args[1] if len(args) >= 2 else 10
         )
-        self.d_model = (
-            kwargs.get("d_model")
-            if "d_model" in kwargs
+        self.t_dim = (
+            kwargs.get("t_dim")
+            if "t_dim" in kwargs
             else args[2] if len(args) >= 3 else 256
         )
         self.nf = (
-            kwargs.get("nf") if "nf" in kwargs else args[3] if len(args) >= 4 else 8
+            kwargs.get("nf") if "nf" in kwargs else args[3] if len(args) >= 4 else 16
         )
         self.bilinear = (
             kwargs.get("bilinear")
@@ -171,40 +167,62 @@ class UNet(nn.Module):
             else args[5] if len(args) >= 5 else False
         )
 
-        d_model = self.d_model
+        t_dim = self.t_dim
         n_channels = self.n_channels
         nf = self.nf
 
-        self.head = DoubleConv(n_channels, nf)
-        self.down1 = DownDoubleConv(nf, 2 * nf)
-        self.down2 = DownDoubleConv(2 * nf, 4 * nf)
-        self.down3 = DownDoubleConv(4 * nf, 8 * nf)
-        self.down4 = DownDoubleConv(8 * nf, 16 * nf)
-        self.down5 = DownDoubleConv(16 * nf, d_model)
-
-        self.up1 = UpDoubleConv(d_model, 16 * nf)
-        self.up2 = UpDoubleConv(16 * nf, 8 * nf)
-        self.up3 = UpDoubleConv(8 * nf, 4 * nf)
-        self.up4 = UpDoubleConv(4 * nf, 2 * nf)
-        self.up5 = UpDoubleConv(2 * nf, nf)
-        self.tail = UpDoubleConv(nf, n_channels, False, None, 3, 1, 1)
+        self.head = nn.Conv2d(n_channels, nf, 3, 1, 1)  # 32x32
+        self.enc1 = ResDown(nf, 2 * nf, t_dim=t_dim)  # 16x16
+        self.enc2 = ResDown(2 * nf, 4 * nf, t_dim=t_dim)  # 8x8
+        self.enc3 = ResDown(4 * nf, 8 * nf, t_dim=t_dim)  # 4x4
+        self.bottleneck = Bottleneck(8 * nf, 8 * nf, t_dim=t_dim)  # 4x4
+        self.dec3 = UpRes(8 * nf, 4 * nf, t_dim=t_dim)  # 8x8
+        self.dec2 = UpRes(4 * nf, 2 * nf, t_dim=t_dim)  # 16x16
+        self.dec1 = UpRes(2 * nf, nf, t_dim=t_dim)  # 32x32
+        self.tail = FinalConv(nf, n_channels)  # 32x32
 
     def forward(self, x, t_emb):
-        x1 = self.head(x, t_emb)
-        x2 = self.down1(x1, t_emb)
-        x3 = self.down2(x2, t_emb)
-        x4 = self.down3(x3, t_emb)
-        x5 = self.down4(x4, t_emb)
-        x6 = self.down5(x5, t_emb)
-
-        y = self.up1(x6, x5, t_emb)
-        y = self.up2(y, x4, t_emb)
-        y = self.up3(y, x3, t_emb)
-        y = self.up4(y, x2, t_emb)
-        y = self.up5(y, x1, t_emb)
-        y = self.tail(y, x, t_emb)
-
+        x = self.head(x)
+        x1 = self.enc1(x, t_emb)
+        x2 = self.enc2(x1, t_emb)
+        x3 = self.enc3(x2, t_emb)
+        x4 = self.bottleneck(x3, t_emb)
+        y = self.dec3(x4, x3, t_emb)
+        y = self.dec2(y, x2, t_emb)
+        y = self.dec1(y, x1, t_emb)
+        y = self.tail(y)
         return y
+
+
+def save_checkpoint(
+    model,
+    optimizer,
+    losses,
+    models_dir,
+    scheduler=None,
+    filename="checkpoint",
+):
+    pathlib.Path(models_dir).mkdir(parents=True, exist_ok=True)
+    save_chk_path = models_dir + "/" + filename + ".pth"
+    checkpoint = {
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "losses": losses,
+        "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
+    }
+    torch.save(checkpoint, save_chk_path)
+
+
+def load_checkpoint(
+    model, optimizer, filename="checkpoint.pth", scheduler=None, device="cpu"
+):
+    checkpoint = torch.load(filename, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if scheduler and checkpoint["scheduler_state_dict"]:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    losses = checkpoint["losses"]
+    return losses
 
 
 def save_model(model, models_dir, name=None):
@@ -251,11 +269,11 @@ def load_model(model_path, *args, **kwargs):
 if __name__ == "__main__":
     cifar_data_dir = os.path.abspath("./data")
     gaussian_diffuser = GaussianDiffuser()
-    trainset = make_cifar_set(data_dir=cifar_data_dir, diffuser=gaussian_diffuser)
+    trainset, _ = make_cifar_set(data_dir=cifar_data_dir, diffuser=gaussian_diffuser)
     train_loader = DataLoader(trainset, batch_size=16)
     n_channels = 3
     n_classes = 10
-    nf = 8
+    nf = 32
     test_model = UNet(n_channels=n_channels, n_classes=n_classes, nf=nf)
     xt, eps, t_embs, ts, labels = next(iter(train_loader))
     out = test_model(xt, t_embs)
