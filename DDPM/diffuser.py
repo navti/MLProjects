@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from utils.data_loading import *
 from torch.utils.data import DataLoader
+import math
 
 
 class TimeEmbedding(nn.Module):
@@ -46,10 +47,20 @@ class TimeEmbedding(nn.Module):
         return self.time_embedding[time_steps, :]
 
 
+def cosine_beta_schedule(timesteps, s=0.02):
+    steps = timesteps + 1
+    x = torch.linspace(0, timesteps, steps)
+    alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * math.pi * 0.5) ** 2
+    alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+    betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+    return betas.clamp(0.0001, 0.9999)
+
+
 class GaussianDiffuser(object):
     def __init__(self, betas=[1e-4, 0.02], T=1000, d_model=256):
         self.T = T
         self.time_embedding = TimeEmbedding(T, d_model)
+        # self.betas = cosine_beta_schedule(T)
         self.betas = torch.linspace(betas[0], betas[1], steps=T)
         # to align with timestep indices
         self.betas = torch.cat([torch.tensor([0]), self.betas])
@@ -105,7 +116,7 @@ class GaussianDiffuser(object):
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    gaussian_diffuser = GaussianDiffuser(device=device)
+    gaussian_diffuser = GaussianDiffuser()
     cifar_set = make_cifar_set(diffuser=gaussian_diffuser)
     batch_size = 16
     cifar_loader = DataLoader(cifar_set, batch_size=batch_size, shuffle=True)
