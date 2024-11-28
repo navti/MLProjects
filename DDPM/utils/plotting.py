@@ -7,35 +7,38 @@ import math
 plt.switch_backend("agg")
 
 
-def save_plots(losses, results_dir, name=None):
+def save_plots(results, results_dir, name=None):
     """
     Save loss and score plots
     :param losses: dict with losses
     :param results_dir: directory where plots will be saved
     :param name: plot file name
     """
-    fig = plt.figure()
     pathlib.Path(results_dir).mkdir(parents=True, exist_ok=True)
     timestr = time.strftime("%Y%m%d-%H%M%S")
     if not name:
         save_plot_path = results_dir + "/plot-" + timestr
     else:
         save_plot_path = results_dir + "/" + name
-    if "train" in losses:
-        plt.plot(losses["train"][1], losses["train"][0], label="Train loss")
-        plt.plot(losses["validation"][1], losses["validation"][0], label="Val loss")
+    fig = plt.figure()
+    if "train" in results:
+        plt.plot(results["train"][1], results["train"][0], label="Train loss")
+        plt.plot(results["validation"][1], results["validation"][0], label="Val loss")
         plt.ylabel("Loss")
         plt.title(f"DDPM losses")
         plt.ylim(0, 5)
-    else:
-        plt.plot(losses["fid"][1], losses["fid"][0], label="FID score")
+    elif "lr" in results:
+        plt.plot(results["lr"][1], results["lr"][0], label="LR schedule")
+        plt.ylabel("LR")
+        plt.title(f"LR Schedule")
+    elif "fid" in results:
+        plt.plot(results["fid"][1], results["fid"][0], label="FID score")
         plt.ylabel("Score")
         plt.title(f"DDPM FID Scores")
     plt.xlabel("Steps")
     plt.legend()
     plt.savefig(save_plot_path, facecolor="w", edgecolor="none")
     plt.close(fig)
-    # print(f"Plot saved at: {save_plot_path}")
 
 
 def draw(xhat, ts, inference_dir=None, name=None):
