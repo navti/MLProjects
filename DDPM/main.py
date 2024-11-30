@@ -32,7 +32,7 @@ def print_training_parameters(args, device):
     print(f"Warmup steps: {args.warmup_steps}")
     print(f"Peak Learning Rate: {args.lr}")
     print(f"No. of diffusion time steps: {args.time_steps}")
-    print(f"Latent dimension: {args.d_model}")
+    print(f"Time embedding dimension: {args.t_dim}")
     print(f"Beta start: {args.beta_start}")
     print(f"Beta end: {args.beta_end}")
     print(f"===========================================")
@@ -47,6 +47,7 @@ if __name__ == "__main__":
         if step < args.warmup_steps:
             return float(step) / args.warmup_steps
         else:
+            # return 1e-1
             progress = float(step - args.warmup_steps) / float(
                 args.total_steps - args.warmup_steps
             )
@@ -56,26 +57,25 @@ if __name__ == "__main__":
     main program starts here
     """
 
-    proj_dir = "/".join(__file__.split("/")[:-1])
+    proj_dir = "/".join(os.path.abspath(__file__).split("/")[:-1])
 
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
 
     torch.manual_seed(args.seed)
-    # args.train = True
-    # args.train_subset = True
 
     model_kwargs = {}
     model_kwargs["n_channels"] = args.n_channels
     model_kwargs["n_classes"] = args.n_classes
-    model_kwargs["d_model"] = args.d_model
+    model_kwargs["t_dim"] = args.t_dim
     model_kwargs["nf"] = args.nf
     model_kwargs["bilinear"] = args.bilinear
 
     results_dir = f"{proj_dir}/results"
     models_dir = f"{proj_dir}/model/saved_models"
+    checkpoint_dir = f"{proj_dir}/model/checkpoints"
     inference_dir = results_dir + "/generated"
-
+    # args.train = True
     if args.train or args.train_subset:
         train_kwargs = {"batch_size": args.batch_size}
         test_kwargs = {"batch_size": args.batch_size}
@@ -110,26 +110,31 @@ if __name__ == "__main__":
         train_loader = DataLoader(trainset, **train_kwargs)
         val_loader = DataLoader(validation_set, **validation_kwargs)
         test_loader = DataLoader(test_set, **test_kwargs)
-        if args.load != None:
-            print(f"Training existing model.")
-            print(f"Loading model from the given path: {args.load}")
-            model = load_model(args.load, **model_kwargs).to(device)
-        else:
-            model = UNet(**model_kwargs).to(device)
-
+        model = UNet(**model_kwargs).to(device)
+        # model = torch.compile(model, mode="default", fullgraph=False)
         loss_criterion = nn.MSELoss()
         optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
         scheduler = LambdaLR(optimizer, lr_lambda)
         grad_scaler = torch.amp.GradScaler(enabled=True)
+
+        losses = {"train": [[], []]}
+        losses.update({"validation": [[], []]})
+        lr_schedule = {"lr": [[], []]}
+        # load checkpointed model
+        if args.load != None:
+            print(f"Training existing model.")
+            print(f"Loading model from the given path: {args.load}")
+            losses, lr_schedule = load_checkpoint(
+                model, optimizer, args.load, scheduler, device
+            )
+            # model = load_model(args.load, **model_kwargs).to(device)
         print("Model summary:")
         summary(model)
 
         print_training_parameters(args, device)
 
         # Run training loop
-        losses = {"train": [[], []]}
-        losses.update({"validation": [[], []]})
-        current_step = 0
+        current_step = len(losses["train"][0])
         # train
         while current_step < args.total_steps:
             for batch_idx, (xt, eps, t_embs, ts, labels) in enumerate(train_loader):
@@ -149,7 +154,7 @@ if __name__ == "__main__":
                 grad_scaler.scale(loss).backward()
                 # unscale gradients before applying
                 grad_scaler.unscale_(optimizer)
-                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
                 scheduler.step()
@@ -157,6 +162,8 @@ if __name__ == "__main__":
                 current_step += 1
                 losses["train"][0].append(avg_step_loss)
                 losses["train"][1].append(current_step)
+                lr_schedule["lr"][0].append(scheduler.get_last_lr()[0])
+                lr_schedule["lr"][1].append(current_step)
                 if current_step % args.logging_steps == 0:
                     val_loss = validate_model(model, val_loader, device, loss_criterion)
                     losses["validation"][0].append(val_loss)
@@ -174,6 +181,7 @@ if __name__ == "__main__":
                     )
                     print(f"=========================")
                     save_plots(losses, results_dir, name="losses")
+                    save_plots(lr_schedule, results_dir, name="lrschedule")
                     generate_images(
                         10,
                         10,
@@ -183,20 +191,40 @@ if __name__ == "__main__":
                         device,
                         name=f"samples_step_{current_step}",
                     )
+                if args.checkpoint != None and current_step % args.checkpoint == 0:
+                    save_checkpoint(
+                        model,
+                        optimizer,
+                        losses,
+                        lr_schedule,
+                        checkpoint_dir,
+                        scheduler,
+                        filename=f"checkpoint_{current_step}",
+                    )
             if args.dry_run:
                 break
 
         # save model
         model_name = f"ddpm"
-        if args.save_model:
-            save_model(model, models_dir, name=model_name)
+        if args.save_model != None:
+            save_checkpoint(
+                model,
+                optimizer,
+                losses,
+                models_dir,
+                scheduler,
+                filename=f"{model_name}",
+            )
+            # save_model(model, models_dir, name=args.save_model)
 
     else:
-        model = load_model(args.load, **model_kwargs)
-        if model == None:
+        # model = load_model(args.load, **model_kwargs)
+        model = UNet(**model_kwargs).to(device)
+        if args.load == None:
             print("Check if the correct model path was provided to load from.")
             parser.print_help(sys.stderr)
             sys.exit(1)
+        load_checkpoint(model, args.load, optimizer=None, scheduler=None, device=device)
         betas = [args.beta_start, args.beta_end]
         T = args.time_steps
         gaussian_diffuser = GaussianDiffuser(betas=betas, T=T)

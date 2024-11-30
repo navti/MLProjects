@@ -198,31 +198,33 @@ def save_checkpoint(
     model,
     optimizer,
     losses,
-    models_dir,
+    lr_schedule,
+    checkpoint_dir,
     scheduler=None,
     filename="checkpoint",
 ):
-    pathlib.Path(models_dir).mkdir(parents=True, exist_ok=True)
-    save_chk_path = models_dir + "/" + filename + ".pth"
+    pathlib.Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    save_chk_path = checkpoint_dir + "/" + filename + ".pth"
     checkpoint = {
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "losses": losses,
+        "lr_schedule": lr_schedule,
         "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
     }
     torch.save(checkpoint, save_chk_path)
 
 
-def load_checkpoint(
-    model, optimizer, filename="checkpoint.pth", scheduler=None, device="cpu"
-):
-    checkpoint = torch.load(filename, map_location=device)
+def load_checkpoint(model, filepath, optimizer=None, scheduler=None, device="cpu"):
+    checkpoint = torch.load(filepath, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
-    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if optimizer and checkpoint["optimizer_state_dict"]:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     if scheduler and checkpoint["scheduler_state_dict"]:
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
     losses = checkpoint["losses"]
-    return losses
+    lr_schedule = checkpoint["lr_schedule"]
+    return losses, lr_schedule
 
 
 def save_model(model, models_dir, name=None):

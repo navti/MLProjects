@@ -56,6 +56,13 @@ def get_args():
         help="Number of training steps",
     )
     parser.add_argument(
+        "--annealing-period",
+        metavar="P",
+        type=int,
+        default=None,
+        help="Number of training steps after which LR annealing schedule repeats",
+    )
+    parser.add_argument(
         "--warmup-steps",
         metavar="WARMUP_STEPS",
         type=int,
@@ -92,10 +99,14 @@ def get_args():
         help="Train model with 1% of dataset.",
     )
     parser.add_argument(
-        "--nf", type=int, default=32, metavar="NF", help="no. of filters (default: 32)"
+        "--nf",
+        type=int,
+        default=32,
+        metavar="NF",
+        help="no. of base filters/channels (default: 32)",
     )
     parser.add_argument(
-        "--d-model",
+        "--t-dim",
         type=int,
         default=256,
         metavar="LD",
@@ -112,8 +123,9 @@ def get_args():
     )
     parser.add_argument(
         "--save-model",
-        action="store_true",
-        default=False,
+        metavar="NAME",
+        type=str,
+        default=None,
         help="For Saving the current Model",
     )
     parser.add_argument(
@@ -128,10 +140,10 @@ def get_args():
         "--amp", action="store_true", default=False, help="Use mixed precision"
     )
     parser.add_argument(
-        "--checkpointing",
-        action="store_true",
-        default=False,
-        help="Use block checkpointing. Slow but uses less memory.",
+        "--checkpoint",
+        type=int,
+        default=None,
+        help="No. of steps for model checkpointing during training.",
     )
     parser.add_argument(
         "--bilinear",
