@@ -5,6 +5,8 @@ from torchinfo import summary
 from torch.optim.lr_scheduler import LambdaLR
 from model import *
 import sys
+import os
+import time
 from collections import defaultdict
 from utils.data_loading import make_cifar_set
 from diffuser import GaussianDiffuser
@@ -46,12 +48,18 @@ if __name__ == "__main__":
     def lr_lambda(step):
         if step < args.warmup_steps:
             return float(step) / args.warmup_steps
+        elif args.lr_schedule == "constant":
+            return 1.0
+        elif args.lr_schedule == "step":
+            f = step // args.steplr_steps
+            return args.steplr_factor**f
         else:
-            # return 1e-1
             progress = float(step - args.warmup_steps) / float(
                 args.total_steps - args.warmup_steps
             )
-            return max(1e-5, (0.5 * (1.0 + math.cos(math.pi * progress))))
+            if args.lr_schedule == "linear":
+                return max(1e-5, 1 - progress)
+            return max(1e-6, (0.5 * (1.0 + math.cos(math.pi * progress))))
 
     """
     main program starts here
@@ -82,7 +90,7 @@ if __name__ == "__main__":
         validation_kwargs = {"batch_size": args.batch_size}
         if use_cuda:
             cuda_kwargs = {
-                "num_workers": 1,
+                "num_workers": 2 * os.cpu_count(),
                 "pin_memory": True,
                 "shuffle": True,
                 "drop_last": True,
@@ -125,8 +133,12 @@ if __name__ == "__main__":
             print(f"Training existing model.")
             print(f"Loading model from the given path: {args.load}")
             losses, lr_schedule = load_checkpoint(
-                model, optimizer, args.load, scheduler, device
+                model, args.load, optimizer, scheduler, device
             )
+            # load peak lr from args
+            scheduler.base_lrs = [args.lr for _ in optimizer.param_groups]
+            # for param_group in optimizer.param_groups:
+            #     param_group["lr"] = args.lr
             # model = load_model(args.load, **model_kwargs).to(device)
         print("Model summary:")
         summary(model)
@@ -137,7 +149,9 @@ if __name__ == "__main__":
         current_step = len(losses["train"][0])
         # train
         while current_step < args.total_steps:
+            # start = time.time()
             for batch_idx, (xt, eps, t_embs, ts, labels) in enumerate(train_loader):
+                # print(f"time: {(time.time() - start)*10000}")
                 model.train()
                 xt = xt.to(device)
                 eps = eps.to(device)
@@ -154,7 +168,7 @@ if __name__ == "__main__":
                 grad_scaler.scale(loss).backward()
                 # unscale gradients before applying
                 grad_scaler.unscale_(optimizer)
-                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
                 scheduler.step()
@@ -201,6 +215,9 @@ if __name__ == "__main__":
                         scheduler,
                         filename=f"checkpoint_{current_step}",
                     )
+                if current_step >= args.total_steps:
+                    break
+                # start = time.time()
             if args.dry_run:
                 break
 
@@ -211,11 +228,11 @@ if __name__ == "__main__":
                 model,
                 optimizer,
                 losses,
+                lr_schedule,
                 models_dir,
                 scheduler,
                 filename=f"{model_name}",
             )
-            # save_model(model, models_dir, name=args.save_model)
 
     else:
         # model = load_model(args.load, **model_kwargs)

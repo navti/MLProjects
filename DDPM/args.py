@@ -49,6 +49,27 @@ def get_args():
         dest="lr",
     )
     parser.add_argument(
+        "--lr-schedule",
+        metavar="NAME",
+        type=str,
+        default="constant",
+        help="learning rate schedule ['constant', 'linear', 'step', 'cosine']",
+    )
+    parser.add_argument(
+        "--steplr-steps",
+        metavar="S",
+        type=int,
+        default=100000,
+        help="Steps period for step LR",
+    )
+    parser.add_argument(
+        "--steplr-factor",
+        metavar="F",
+        type=float,
+        default=0.5,
+        help="Factor to reduce LR by in step LR",
+    )
+    parser.add_argument(
         "--total-steps",
         metavar="TS",
         type=int,
