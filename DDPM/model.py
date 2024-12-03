@@ -15,14 +15,53 @@ from torch.utils.data import DataLoader
 """ Parts of the U-Net model """
 
 
+def init_weights(modules):
+    for m in modules:
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
+            nn.init.xavier_normal_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+
+
+class AttentionBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        groups = 32 if channels % 32 == 0 else 1
+        self.norm = nn.GroupNorm(groups, channels)
+        # self.norm = nn.BatchNorm2d(channels)
+        self.qkv = nn.Conv2d(channels, channels * 3, 1)
+        self.proj_out = nn.Conv2d(channels, channels, 1)
+        self._init_weights()
+
+    def _init_weights(self):
+        init_weights([self.qkv])
+        init_weights([self.proj_out])
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        h = self.norm(x)
+
+        q, k, v = self.qkv(h).chunk(3, dim=1)
+        q = q.reshape(B, C, H * W).permute(0, 2, 1)  # (B, HW, C)
+        k = k.reshape(B, C, H * W)  # (B, C, HW)
+        v = v.reshape(B, C, H * W).permute(0, 2, 1)  # (B, HW, C)
+
+        attn = torch.bmm(q, k) / (C**0.5)  # (B, HW, HW)
+        attn = attn.softmax(dim=-1)
+
+        out = torch.bmm(attn, v)  # (B, HW, C)
+        out = out.permute(0, 2, 1).reshape(B, C, H, W)
+        return x + self.proj_out(out)
+
+
 class ResBlock(nn.Module):
     def __init__(self, in_c, out_c, t_dim=256, dropout=0.1, Activation=nn.ReLU):
         super().__init__()
         groups = 32 if in_c % 32 == 0 else 1
         activation = nn.Identity() if Activation == None else Activation()
         self.block1 = nn.Sequential(
-            # nn.GroupNorm(groups, in_c),
-            nn.BatchNorm2d(in_c),
+            nn.GroupNorm(groups, in_c),
+            # nn.BatchNorm2d(in_c),
             activation,
             nn.Conv2d(in_c, out_c, 3, stride=1, padding=1),
         )
@@ -30,14 +69,21 @@ class ResBlock(nn.Module):
             nn.Linear(t_dim, out_c),
         )
         self.block2 = nn.Sequential(
-            # nn.GroupNorm(groups, out_c),
-            nn.BatchNorm2d(out_c),
+            nn.GroupNorm(groups, out_c),
+            # nn.BatchNorm2d(out_c),
             activation,
             nn.Dropout(dropout),
             nn.Conv2d(out_c, out_c, 3, stride=1, padding=1),
         )
         # skip connection with conv if in_c is not same as out_c
         self.skip_conv = nn.Conv2d(in_c, out_c, 1) if in_c != out_c else nn.Identity()
+        self._init_weights()
+
+    def _init_weights(self):
+        init_weights(self.block1)
+        init_weights(self.block2)
+        init_weights(self.temb_proj)
+        init_weights([self.skip_conv])
 
     def forward(self, x, t_emb):
         h = self.block1(x)
@@ -53,6 +99,10 @@ class Down(nn.Module):
     def __init__(self, in_c):
         super(Down, self).__init__()
         self.down = nn.Conv2d(in_c, in_c, 4, 2, 1)
+        self._init_weights()
+
+    def _init_weights(self):
+        init_weights([self.down])
 
     def forward(self, x):
         return self.down(x)
@@ -62,11 +112,14 @@ class ResDown(nn.Module):
     def __init__(self, in_c, out_c, t_dim=256, dropout=0.1, Activation=nn.ReLU):
         super(ResDown, self).__init__()
         self.res1 = ResBlock(in_c, out_c, t_dim, dropout, Activation)
+        self.attn = AttentionBlock(out_c)
         self.res2 = ResBlock(out_c, out_c, t_dim, dropout, Activation)
         self.down = Down(out_c)
 
     def forward(self, x, t_emb):
         x = self.res1(x, t_emb)
+        if x.shape[-1] == 4 or x.shape[-1] == 8:
+            x = self.attn(x)
         x = self.res2(x, t_emb)
         x = self.down(x)
         return x
@@ -77,9 +130,11 @@ class Bottleneck(nn.Module):
         super(Bottleneck, self).__init__()
         self.res1 = ResBlock(in_c, out_c, t_dim, dropout, Activation)
         self.res2 = ResBlock(out_c, out_c, t_dim, dropout, Activation)
+        self.attn = AttentionBlock(out_c)
 
     def forward(self, x, t_emb):
         x = self.res1(x, t_emb)
+        x = self.attn(x)
         x = self.res2(x, t_emb)
         return x
 
@@ -87,13 +142,19 @@ class Bottleneck(nn.Module):
 class Up(nn.Module):
     def __init__(self, in_c, out_c, Activation=nn.ReLU):
         super(Up, self).__init__()
+        groups = 32 if out_c % 32 == 0 else 1
         activation = nn.Identity() if Activation == None else Activation()
         self.up_sample = nn.Sequential(
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
             nn.Conv2d(in_c, out_c, 3, 1, 1),
-            nn.BatchNorm2d(out_c),
+            # nn.BatchNorm2d(out_c),
+            nn.GroupNorm(groups, out_c),
             activation,
         )
+        self._init_weights()
+
+    def _init_weights(self):
+        init_weights(self.up_sample)
 
     def forward(self, x):
         x = self.up_sample(x)
@@ -107,6 +168,7 @@ class UpRes(nn.Module):
         super(UpRes, self).__init__()
         self.up = Up(in_c, out_c, Activation=Activation)
         self.res1 = ResBlock(in_c + out_c, out_c, t_dim, dropout, Activation)
+        self.attn = AttentionBlock(out_c)
         self.res2 = ResBlock(out_c, out_c, t_dim, dropout, Activation)
 
     def forward(self, x1, x2, t_emb):
@@ -117,6 +179,8 @@ class UpRes(nn.Module):
         x2 = F.pad(x2, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
         x = torch.cat([x2, x1], dim=1)
         x = self.res1(x, t_emb)
+        if x.shape[-1] == 4 or x.shape[-1] == 8:
+            x = self.attn(x)
         x = self.res2(x, t_emb)
         return x
 
@@ -130,6 +194,10 @@ class FinalConv(nn.Module):
             # nn.ReLU(),
             # nn.Conv2d(mid_c, out_c, 3, 1, 1),
         )
+        self._init_weights()
+
+    def _init_weights(self):
+        init_weights(self.conv)
 
     def forward(self, x):
         return self.conv(x)
