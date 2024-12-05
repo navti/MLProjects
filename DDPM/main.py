@@ -7,6 +7,7 @@ from model import *
 import sys
 import os
 import time
+from lion_pytorch import Lion
 from collections import defaultdict
 from utils.data_loading import make_cifar_set
 from diffuser import GaussianDiffuser
@@ -33,6 +34,8 @@ def print_training_parameters(args, device):
     print(f"Training steps: {args.total_steps}")
     print(f"Warmup steps: {args.warmup_steps}")
     print(f"Peak Learning Rate: {args.lr}")
+    print(f"Learning Rate schedule: {args.lr_schedule}")
+    print(f"No. of base channels (nf): {args.nf}")
     print(f"No. of diffusion time steps: {args.time_steps}")
     print(f"Time embedding dimension: {args.t_dim}")
     print(f"Beta start: {args.beta_start}")
@@ -102,7 +105,7 @@ if __name__ == "__main__":
         cifar_data_dir = f"{proj_dir}/data"
         betas = [args.beta_start, args.beta_end]
         T = args.time_steps
-        gaussian_diffuser = GaussianDiffuser(betas=betas, T=T)
+        gaussian_diffuser = GaussianDiffuser(betas=betas, T=T, d_model=args.t_dim)
         train_set, test_set = make_cifar_set(
             data_dir=cifar_data_dir, diffuser=gaussian_diffuser
         )
@@ -121,7 +124,8 @@ if __name__ == "__main__":
         model = UNet(**model_kwargs).to(device)
         # model = torch.compile(model, mode="default", fullgraph=False)
         loss_criterion = nn.MSELoss()
-        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+        # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+        optimizer = Lion(model.parameters(), lr=args.lr, weight_decay=1e-2)
         scheduler = LambdaLR(optimizer, lr_lambda)
         grad_scaler = torch.amp.GradScaler(enabled=True)
 
