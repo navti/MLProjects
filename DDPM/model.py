@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 
 def init_weights(modules):
     for m in modules:
-        if isinstance(m, (nn.Conv2d, nn.Linear)):
+        if isinstance(m, (nn.ConvTranspose2d, nn.Conv2d, nn.Linear)):
             nn.init.xavier_normal_(m.weight)
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
@@ -112,15 +112,18 @@ class ResDown(nn.Module):
     def __init__(self, in_c, out_c, t_dim=256, dropout=0.1, Activation=nn.ReLU):
         super(ResDown, self).__init__()
         self.res1 = ResBlock(in_c, out_c, t_dim, dropout, Activation)
-        self.attn = AttentionBlock(out_c)
+        self.attn1 = AttentionBlock(out_c)
         self.res2 = ResBlock(out_c, out_c, t_dim, dropout, Activation)
+        self.attn2 = AttentionBlock(out_c)
         self.down = Down(out_c)
 
     def forward(self, x, t_emb):
         x = self.res1(x, t_emb)
-        if x.shape[-1] == 4 or x.shape[-1] == 8:
-            x = self.attn(x)
+        if x.shape[-1] <= 8:
+            x = self.attn1(x)
         x = self.res2(x, t_emb)
+        if x.shape[-1] <= 8:
+            x = self.attn2(x)
         x = self.down(x)
         return x
 
@@ -130,12 +133,14 @@ class Bottleneck(nn.Module):
         super(Bottleneck, self).__init__()
         self.res1 = ResBlock(in_c, out_c, t_dim, dropout, Activation)
         self.res2 = ResBlock(out_c, out_c, t_dim, dropout, Activation)
-        self.attn = AttentionBlock(out_c)
+        self.attn1 = AttentionBlock(out_c)
+        self.attn2 = AttentionBlock(out_c)
 
     def forward(self, x, t_emb):
         x = self.res1(x, t_emb)
-        x = self.attn(x)
+        x = self.attn1(x)
         x = self.res2(x, t_emb)
+        x = self.attn2(x)
         return x
 
 
@@ -145,7 +150,8 @@ class Up(nn.Module):
         groups = 32 if out_c % 32 == 0 else 1
         activation = nn.Identity() if Activation == None else Activation()
         self.up_sample = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            # nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.ConvTranspose2d(in_c, in_c, 4, 2, 1),
             nn.Conv2d(in_c, out_c, 3, 1, 1),
             # nn.BatchNorm2d(out_c),
             nn.GroupNorm(groups, out_c),
@@ -168,8 +174,9 @@ class UpRes(nn.Module):
         super(UpRes, self).__init__()
         self.up = Up(in_c, out_c, Activation=Activation)
         self.res1 = ResBlock(in_c + out_c, out_c, t_dim, dropout, Activation)
-        self.attn = AttentionBlock(out_c)
+        self.attn1 = AttentionBlock(out_c)
         self.res2 = ResBlock(out_c, out_c, t_dim, dropout, Activation)
+        self.attn2 = AttentionBlock(out_c)
 
     def forward(self, x1, x2, t_emb):
         x1 = self.up(x1)
@@ -179,9 +186,35 @@ class UpRes(nn.Module):
         x2 = F.pad(x2, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
         x = torch.cat([x2, x1], dim=1)
         x = self.res1(x, t_emb)
-        if x.shape[-1] == 4 or x.shape[-1] == 8:
-            x = self.attn(x)
+        if x.shape[-1] <= 8:
+            x = self.attn1(x)
         x = self.res2(x, t_emb)
+        if x.shape[-1] <= 8:
+            x = self.attn2(x)
+        return x
+
+
+class HeadConv(nn.Module):
+    def __init__(self, in_c, out_c, t_dim):
+        super(HeadConv, self).__init__()
+        groups = 32 if in_c % 32 == 0 else 1
+        self.temb_proj = nn.Sequential(
+            nn.Linear(t_dim, out_c),
+        )
+        self.conv = nn.Sequential(
+            # nn.GroupNorm(groups, in_c),
+            # nn.ReLU(),
+            nn.Conv2d(in_c, out_c, 3, 1, 1),
+        )
+        self._init_weights()
+
+    def _init_weights(self):
+        init_weights(self.temb_proj)
+        init_weights(self.conv)
+
+    def forward(self, x, t_emb):
+        x = self.conv(x)
+        x = x + self.temb_proj(t_emb)[:, :, None, None]
         return x
 
 
@@ -239,18 +272,19 @@ class UNet(nn.Module):
         n_channels = self.n_channels
         nf = self.nf
 
-        self.head = nn.Conv2d(n_channels, nf, 3, 1, 1)  # 32x32
+        # self.head = nn.Conv2d(n_channels, nf, 3, 1, 1)  # 32x32
+        self.head = HeadConv(n_channels, nf, t_dim=t_dim)  # 32x32
         self.enc1 = ResDown(nf, 2 * nf, t_dim=t_dim)  # 16x16
         self.enc2 = ResDown(2 * nf, 4 * nf, t_dim=t_dim)  # 8x8
-        self.enc3 = ResDown(4 * nf, 8 * nf, t_dim=t_dim)  # 4x4
-        self.bottleneck = Bottleneck(8 * nf, 8 * nf, t_dim=t_dim)  # 4x4
-        self.dec3 = UpRes(8 * nf, 4 * nf, t_dim=t_dim)  # 8x8
-        self.dec2 = UpRes(4 * nf, 2 * nf, t_dim=t_dim)  # 16x16
-        self.dec1 = UpRes(2 * nf, nf, t_dim=t_dim)  # 32x32
+        self.enc3 = ResDown(4 * nf, 4 * nf, t_dim=t_dim)  # 4x4
+        self.bottleneck = Bottleneck(4 * nf, 4 * nf, t_dim=t_dim)  # 2x2
+        self.dec3 = UpRes(4 * nf, 4 * nf, t_dim=t_dim)  # 4x4
+        self.dec2 = UpRes(4 * nf, 2 * nf, t_dim=t_dim)  # 8x8
+        self.dec1 = UpRes(2 * nf, nf, t_dim=t_dim)  # 16x16
         self.tail = FinalConv(nf, n_channels)  # 32x32
 
     def forward(self, x, t_emb):
-        x = self.head(x)
+        x = self.head(x, t_emb)
         x1 = self.enc1(x, t_emb)
         x2 = self.enc2(x1, t_emb)
         x3 = self.enc3(x2, t_emb)
@@ -338,13 +372,13 @@ def load_model(model_path, *args, **kwargs):
 
 if __name__ == "__main__":
     cifar_data_dir = os.path.abspath("./data")
-    gaussian_diffuser = GaussianDiffuser()
+    gaussian_diffuser = GaussianDiffuser(d_model=512)
     trainset, _ = make_cifar_set(data_dir=cifar_data_dir, diffuser=gaussian_diffuser)
     train_loader = DataLoader(trainset, batch_size=16)
     n_channels = 3
     n_classes = 10
     nf = 32
-    test_model = UNet(n_channels=n_channels, n_classes=n_classes, nf=nf)
+    test_model = UNet(n_channels=n_channels, n_classes=n_classes, nf=nf, t_dim=512)
     xt, eps, t_embs, ts, labels = next(iter(train_loader))
     out = test_model(xt, t_embs)
     print(f"{out.shape}")
