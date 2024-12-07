@@ -86,32 +86,29 @@ class GaussianDiffuser(object):
         return xt, eps, t_embs, ts
 
     def sample(self, model, size, device="cpu"):
-        # size: BCHW
         model.eval()
         with torch.no_grad():
             batch_size = size[0]
-            xt = torch.randn(size=size)
-            ts = torch.tensor(list(range(self.T, 0, -1)))
-            for t in ts:
-                t_emb = self.time_embedding(t)
-                t_emb = t_emb.expand(batch_size, -1)
-                xt = xt.to(device)
+            xt = torch.randn(size=size, device=device)
+            for t in reversed(range(1, self.T + 1)):
+                t_emb = self.time_embedding(t).expand(batch_size, -1)
                 t_emb = t_emb.to(device)
                 eps = model(xt, t_emb)
-                factor = self.betas[t] / torch.sqrt(1 - self.alphas_bar[t])
-                mean_t_bar = (xt - eps * factor) / torch.sqrt(self.alphas[t])
-                sigma_t = torch.sqrt(self.betas[t])
-                z = torch.randn_like(mean_t_bar)
+
+                beta_t = self.betas[t]
+                alpha_t = self.alphas[t]
+                alpha_bar_t = self.alphas_bar[t]
+
+                factor = beta_t / torch.sqrt(1 - alpha_bar_t)
+                mean_t_bar = (xt - eps * factor) / torch.sqrt(alpha_t)
+                sigma_t = torch.sqrt(beta_t)
+
                 if t == 1:
-                    x0 = torch.clamp(mean_t_bar, min=-1.0, max=1.0)
-                    x0 = (x0 + 1) / 2
-                    return x0
-                xt_1 = mean_t_bar + sigma_t * z
-                # clear gpu tensors
-                del xt, t_emb, eps, mean_t_bar, z
-                xt = xt_1.detach().clone()
-                del xt_1
-                torch.cuda.empty_cache()
+                    x0 = torch.clamp(mean_t_bar, -1.0, 1.0)
+                    return (x0 + 1) / 2
+
+                z = torch.randn_like(mean_t_bar)
+                xt = mean_t_bar + sigma_t * z
 
 
 if __name__ == "__main__":
