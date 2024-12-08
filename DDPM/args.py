@@ -167,9 +167,10 @@ def get_args():
         help="No. of steps for model checkpointing during training.",
     )
     parser.add_argument(
-        "--bilinear",
-        action="store_true",
-        default=False,
-        help="Upsample type. Currently not supported.",
+        "--dropout",
+        metavar="D",
+        type=float,
+        default=0.1,
+        help="Dropout factor to be used in the model layers.",
     )
     return parser, parser.parse_args()

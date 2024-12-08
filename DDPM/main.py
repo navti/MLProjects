@@ -33,6 +33,8 @@ def print_training_parameters(args, device):
     print(f"Batch size: {args.batch_size}")
     print(f"Training steps: {args.total_steps}")
     print(f"Warmup steps: {args.warmup_steps}")
+    print(f"Automatic mixed precision: {args.amp}")
+    print(f"Dropout: {args.dropout}")
     print(f"Peak Learning Rate: {args.lr}")
     print(f"Learning Rate schedule: {args.lr_schedule}")
     print(f"No. of base channels (nf): {args.nf}")
@@ -80,7 +82,7 @@ if __name__ == "__main__":
     model_kwargs["n_classes"] = args.n_classes
     model_kwargs["t_dim"] = args.t_dim
     model_kwargs["nf"] = args.nf
-    model_kwargs["bilinear"] = args.bilinear
+    model_kwargs["dropout"] = args.dropout
 
     results_dir = f"{proj_dir}/results"
     models_dir = f"{proj_dir}/model/saved_models"
@@ -90,10 +92,10 @@ if __name__ == "__main__":
     if args.train or args.train_subset:
         train_kwargs = {"batch_size": args.batch_size}
         test_kwargs = {"batch_size": args.batch_size}
-        validation_kwargs = {"batch_size": args.batch_size}
+        validation_kwargs = {"batch_size": 128}
         if use_cuda:
             cuda_kwargs = {
-                "num_workers": 2 * os.cpu_count(),
+                "num_workers": os.cpu_count(),
                 "pin_memory": True,
                 "shuffle": True,
                 "drop_last": True,
@@ -127,7 +129,7 @@ if __name__ == "__main__":
         # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
         optimizer = Lion(model.parameters(), lr=args.lr, weight_decay=1e-2)
         scheduler = LambdaLR(optimizer, lr_lambda)
-        grad_scaler = torch.amp.GradScaler(enabled=True)
+        grad_scaler = torch.amp.GradScaler(enabled=args.amp)
 
         losses = {"train": [[], []]}
         losses.update({"validation": [[], []]})
@@ -163,7 +165,7 @@ if __name__ == "__main__":
                 labels = labels.to(device)
                 batch_size = xt.shape[0]
                 # use automatic mixed precision training
-                with torch.autocast(device.type, enabled=True):
+                with torch.autocast(device.type, enabled=args.amp):
                     predicted_eps = model(xt, t_embs)
                     loss = loss_criterion(predicted_eps, eps)
                     avg_step_loss = 1e4 * loss.item() / batch_size
