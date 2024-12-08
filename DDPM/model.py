@@ -198,9 +198,9 @@ class HeadConv(nn.Module):
     def __init__(self, in_c, out_c, t_dim):
         super(HeadConv, self).__init__()
         groups = 32 if in_c % 32 == 0 else 1
-        self.temb_proj = nn.Sequential(
-            nn.Linear(t_dim, out_c),
-        )
+        # self.temb_proj = nn.Sequential(
+        #     nn.Linear(t_dim, out_c),
+        # )
         self.conv = nn.Sequential(
             # nn.GroupNorm(groups, in_c),
             # nn.ReLU(),
@@ -209,12 +209,12 @@ class HeadConv(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        init_weights(self.temb_proj)
+        # init_weights(self.temb_proj)
         init_weights(self.conv)
 
     def forward(self, x, t_emb):
         x = self.conv(x)
-        x = x + self.temb_proj(t_emb)[:, :, None, None]
+        # x = x + self.temb_proj(t_emb)[:, :, None, None]
         return x
 
 
@@ -238,7 +238,7 @@ class FinalConv(nn.Module):
 
 class UNet(nn.Module):
     """
-    args list: n_channels=3, n_classes=10, t_dim=256, nf=8, bilinear=False
+    args list: n_channels=3, n_classes=10, t_dim=512, nf=128, dropout=0.1
 
     """
 
@@ -262,25 +262,26 @@ class UNet(nn.Module):
         self.nf = (
             kwargs.get("nf") if "nf" in kwargs else args[3] if len(args) >= 4 else 16
         )
-        self.bilinear = (
-            kwargs.get("bilinear")
-            if "bilinear" in kwargs
+        self.dropout = (
+            kwargs.get("dropout")
+            if "dropout" in kwargs
             else args[5] if len(args) >= 5 else False
         )
 
         t_dim = self.t_dim
         n_channels = self.n_channels
         nf = self.nf
+        dropout = self.dropout
+        activation = nn.SiLU
 
-        # self.head = nn.Conv2d(n_channels, nf, 3, 1, 1)  # 32x32
         self.head = HeadConv(n_channels, nf, t_dim=t_dim)  # 32x32
-        self.enc1 = ResDown(nf, 2 * nf, t_dim=t_dim)  # 16x16
-        self.enc2 = ResDown(2 * nf, 4 * nf, t_dim=t_dim)  # 8x8
-        self.enc3 = ResDown(4 * nf, 4 * nf, t_dim=t_dim)  # 4x4
-        self.bottleneck = Bottleneck(4 * nf, 4 * nf, t_dim=t_dim)  # 2x2
-        self.dec3 = UpRes(4 * nf, 4 * nf, t_dim=t_dim)  # 4x4
-        self.dec2 = UpRes(4 * nf, 2 * nf, t_dim=t_dim)  # 8x8
-        self.dec1 = UpRes(2 * nf, nf, t_dim=t_dim)  # 16x16
+        self.enc1 = ResDown(nf, 2 * nf, t_dim, dropout, activation)  # 16x16
+        self.enc2 = ResDown(2 * nf, 4 * nf, t_dim, dropout, activation)  # 8x8
+        self.enc3 = ResDown(4 * nf, 4 * nf, t_dim, dropout, activation)  # 4x4
+        self.bottleneck = Bottleneck(4 * nf, 4 * nf, t_dim, dropout, activation)  # 2x2
+        self.dec3 = UpRes(4 * nf, 4 * nf, t_dim, dropout, activation)  # 4x4
+        self.dec2 = UpRes(4 * nf, 2 * nf, t_dim, dropout, activation)  # 8x8
+        self.dec1 = UpRes(2 * nf, nf, t_dim, dropout, activation)  # 16x16
         self.tail = FinalConv(nf, n_channels)  # 32x32
 
     def forward(self, x, t_emb):
