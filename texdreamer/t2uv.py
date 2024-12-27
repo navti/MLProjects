@@ -1,5 +1,6 @@
 # t2uv.py
 
+import yaml
 from transformers import CLIPTokenizer, CLIPTextModel
 from diffusers import StableDiffusionPipeline, DDPMScheduler
 from peft import get_peft_model
@@ -8,37 +9,62 @@ from torch.optim import AdamW
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
+import os
 
 from dataset import HuggingFaceATLAS
 from lora_patch import apply_lora_to_model
 
 
+with open("config/train_config.yaml", "r") as f:
+    cfg = yaml.safe_load(f)
+model_cache_path = os.path.expanduser(cfg["model"]["cache_dir"])
+data_cache_path = os.path.expanduser(cfg["data"]["cache_dir"])
+
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    device = torch.device("cpu")
     # Load SD pipeline & tokenizer
     pipe = StableDiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-2-1-base", torch_dtype=torch.float16
+        cfg["model"]["pretrained_model"],
+        cache_dir=model_cache_path,
+        torch_dtype=torch.float16,
     ).to(device)
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14-336")
+    tokenizer = CLIPTokenizer.from_pretrained(
+        cfg["model"]["text_encoder"], cache_dir=model_cache_path
+    )
     text_encoder = CLIPTextModel.from_pretrained(
-        "openai/clip-vit-large-patch14-336"
+        cfg["model"]["text_encoder"], cache_dir=model_cache_path
     ).to(device)
 
     # Apply LoRA
-    unet, text_encoder = apply_lora_to_model(pipe.unet, text_encoder)
+    unet, text_encoder = apply_lora_to_model(
+        pipe.unet,
+        text_encoder,
+        r=cfg["model"]["lora"]["r"],
+        alpha=cfg["model"]["lora"]["alpha"],
+    )
 
     # Dataset and dataloader
-    dataset = HuggingFaceATLAS(split="train")
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+    dataset = HuggingFaceATLAS(
+        split=cfg["data"]["split"],
+        prompts_file=cfg["data"]["prompts_file"],
+        cache_dir=data_cache_path,
+    )
+    dataloader = DataLoader(
+        dataset, batch_size=cfg["training"]["batch_size"], shuffle=True
+    )
 
     optimizer = AdamW(
-        list(unet.parameters()) + list(text_encoder.parameters()), lr=1e-4
+        list(unet.parameters()) + list(text_encoder.parameters()),
+        lr=cfg["training"]["learning_rate"],
     )
-    scheduler = DDPMScheduler.from_pretrained("stabilityai/stable-diffusion-2-1-base")
+    scheduler = DDPMScheduler.from_pretrained(
+        cfg["model"]["pretrained_model"], cache_dir=model_cache_path
+    )
 
-    for epoch in range(10):
-        for batch in tqdm(dataloader):
+    for epoch in range(cfg["training"]["num_epochs"]):
+        for step, batch in enumerate(tqdm(dataloader)):
             text_inputs = tokenizer(
                 batch["prompt"],
                 return_tensors="pt",
@@ -71,7 +97,8 @@ def main():
             loss.backward()
             optimizer.step()
 
-            print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
+            if step % cfg["output"]["log_every"] == 0:
+                print(f"Epoch {epoch}, Step {step}, Loss: {loss.item():.4f}")
 
 
 if __name__ == "__main__":

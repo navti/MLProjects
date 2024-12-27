@@ -6,8 +6,13 @@ from torch.utils.data import Dataset
 
 
 class HuggingFaceATLAS(Dataset):
-    def __init__(self, split="train", prompts_file="atlas_prompt_50k.txt"):
-        self.dataset = load_dataset("ggxxii/ATLAS", split=split)
+    def __init__(
+        self,
+        split="train",
+        prompts_file="atlas_prompt_50k.txt",
+        cache_dir="~/huggingface/hf_datasets",
+    ):
+        self.dataset = load_dataset("ggxxii/ATLAS", split=split, cache_dir=cache_dir)
         self.prompts = self._load_prompts(prompts_file)
         assert len(self.dataset) == len(
             self.prompts
