@@ -34,6 +34,7 @@ def print_training_parameters(args, device):
     print(f"Training steps: {args.total_steps}")
     print(f"Warmup steps: {args.warmup_steps}")
     print(f"Automatic mixed precision: {args.amp}")
+    print(f"Training subset: {args.train_subset}")
     print(f"Dropout: {args.dropout}")
     print(f"Peak Learning Rate: {args.lr}")
     print(f"Learning Rate schedule: {args.lr_schedule}")
@@ -92,10 +93,10 @@ if __name__ == "__main__":
     if args.train or args.train_subset:
         train_kwargs = {"batch_size": args.batch_size}
         test_kwargs = {"batch_size": args.batch_size}
-        validation_kwargs = {"batch_size": 128}
+        validation_kwargs = {"batch_size": args.batch_size}  # 128}
         if use_cuda:
             cuda_kwargs = {
-                "num_workers": os.cpu_count(),
+                "num_workers": 1,  # os.cpu_count(),
                 "pin_memory": True,
                 "shuffle": True,
                 "drop_last": True,
@@ -113,11 +114,7 @@ if __name__ == "__main__":
         )
         trainset, validation_set = random_split(train_set, [0.9, 0.1])
         if args.train_subset:
-            subset_size = int(0.01 * len(trainset))
-            indices = torch.arange(len(trainset))
-            subset_indices = indices[:subset_size]
-            subset_sampler = SubsetRandomSampler(subset_indices)
-            train_kwargs.update({"sampler": subset_sampler, "shuffle": False})
+            trainset, validation_set, _ = random_split(train_set, [0.011, 0.011, 0.978])
 
         # data loaders
         train_loader = DataLoader(trainset, **train_kwargs)
@@ -127,7 +124,10 @@ if __name__ == "__main__":
         # model = torch.compile(model, mode="default", fullgraph=False)
         loss_criterion = nn.MSELoss()
         # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-        optimizer = Lion(model.parameters(), lr=args.lr, weight_decay=1e-2)
+        optimizer = Lion(model.parameters(), lr=args.lr, weight_decay=1e-4)
+        # optimizer = optim.SGD(
+        # model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4
+        # )
         scheduler = LambdaLR(optimizer, lr_lambda)
         grad_scaler = torch.amp.GradScaler(enabled=args.amp)
 
@@ -143,9 +143,6 @@ if __name__ == "__main__":
             )
             # load peak lr from args
             scheduler.base_lrs = [args.lr for _ in optimizer.param_groups]
-            # for param_group in optimizer.param_groups:
-            #     param_group["lr"] = args.lr
-            # model = load_model(args.load, **model_kwargs).to(device)
         print("Model summary:")
         summary(model)
 

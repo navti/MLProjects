@@ -28,7 +28,6 @@ class AttentionBlock(nn.Module):
         super().__init__()
         groups = 32 if channels % 32 == 0 else 1
         self.norm = nn.GroupNorm(groups, channels)
-        # self.norm = nn.BatchNorm2d(channels)
         self.qkv = nn.Conv2d(channels, channels * 3, 1)
         self.proj_out = nn.Conv2d(channels, channels, 1)
         self._init_weights()
@@ -61,19 +60,12 @@ class ResBlock(nn.Module):
         activation = nn.Identity() if Activation == None else Activation()
         self.block1 = nn.Sequential(
             nn.GroupNorm(groups, in_c),
-            # nn.BatchNorm2d(in_c),
             activation,
+            nn.Dropout(dropout),
             nn.Conv2d(in_c, out_c, 3, stride=1, padding=1),
         )
         self.temb_proj = nn.Sequential(
             nn.Linear(t_dim, out_c),
-        )
-        self.block2 = nn.Sequential(
-            nn.GroupNorm(groups, out_c),
-            # nn.BatchNorm2d(out_c),
-            activation,
-            nn.Dropout(dropout),
-            nn.Conv2d(out_c, out_c, 3, stride=1, padding=1),
         )
         # skip connection with conv if in_c is not same as out_c
         self.skip_conv = nn.Conv2d(in_c, out_c, 1) if in_c != out_c else nn.Identity()
@@ -81,14 +73,12 @@ class ResBlock(nn.Module):
 
     def _init_weights(self):
         init_weights(self.block1)
-        init_weights(self.block2)
         init_weights(self.temb_proj)
         init_weights([self.skip_conv])
 
     def forward(self, x, t_emb):
         h = self.block1(x)
         h = h + self.temb_proj(t_emb)[:, :, None, None]
-        h = self.block2(h)
         h = h + self.skip_conv(x)
         return h
 
@@ -96,13 +86,15 @@ class ResBlock(nn.Module):
 class Down(nn.Module):
     """Downscaling with maxpool"""
 
-    def __init__(self, in_c):
+    def __init__(self, in_c, Activation=nn.ReLU):
         super(Down, self).__init__()
-        self.down = nn.Conv2d(in_c, in_c, 4, 2, 1)
+        self.down = nn.Sequential(
+            nn.Conv2d(in_c, in_c, 4, 2, 1),
+        )
         self._init_weights()
 
     def _init_weights(self):
-        init_weights([self.down])
+        init_weights(self.down)
 
     def forward(self, x):
         return self.down(x)
@@ -115,7 +107,7 @@ class ResDown(nn.Module):
         self.attn1 = AttentionBlock(out_c)
         self.res2 = ResBlock(out_c, out_c, t_dim, dropout, Activation)
         self.attn2 = AttentionBlock(out_c)
-        self.down = Down(out_c)
+        self.down = Down(out_c, Activation)
 
     def forward(self, x, t_emb):
         x = self.res1(x, t_emb)
@@ -147,15 +139,8 @@ class Bottleneck(nn.Module):
 class Up(nn.Module):
     def __init__(self, in_c, out_c, Activation=nn.ReLU):
         super(Up, self).__init__()
-        groups = 32 if out_c % 32 == 0 else 1
-        activation = nn.Identity() if Activation == None else Activation()
         self.up_sample = nn.Sequential(
-            # nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
-            nn.ConvTranspose2d(in_c, in_c, 4, 2, 1),
-            nn.Conv2d(in_c, out_c, 3, 1, 1),
-            # nn.BatchNorm2d(out_c),
-            nn.GroupNorm(groups, out_c),
-            activation,
+            nn.ConvTranspose2d(in_c, out_c, 4, 2, 1),
         )
         self._init_weights()
 
@@ -195,37 +180,26 @@ class UpRes(nn.Module):
 
 
 class HeadConv(nn.Module):
-    def __init__(self, in_c, out_c, t_dim):
+    def __init__(self, in_c, out_c, t_dim, Activation=nn.ReLU):
         super(HeadConv, self).__init__()
-        groups = 32 if in_c % 32 == 0 else 1
-        # self.temb_proj = nn.Sequential(
-        #     nn.Linear(t_dim, out_c),
-        # )
         self.conv = nn.Sequential(
-            # nn.GroupNorm(groups, in_c),
-            # nn.ReLU(),
             nn.Conv2d(in_c, out_c, 3, 1, 1),
         )
         self._init_weights()
 
     def _init_weights(self):
-        # init_weights(self.temb_proj)
         init_weights(self.conv)
 
     def forward(self, x, t_emb):
         x = self.conv(x)
-        # x = x + self.temb_proj(t_emb)[:, :, None, None]
         return x
 
 
 class FinalConv(nn.Module):
-    def __init__(self, in_c, out_c):
+    def __init__(self, in_c, out_c, Activation=nn.ReLU):
         super(FinalConv, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_c, out_c, 3, 1, 1),
-            # nn.BatchNorm2d(mid_c),
-            # nn.ReLU(),
-            # nn.Conv2d(mid_c, out_c, 3, 1, 1),
         )
         self._init_weights()
 
@@ -274,15 +248,17 @@ class UNet(nn.Module):
         dropout = self.dropout
         activation = nn.SiLU
 
-        self.head = HeadConv(n_channels, nf, t_dim=t_dim)  # 32x32
+        self.head = HeadConv(n_channels, nf, t_dim, activation)  # 32x32
         self.enc1 = ResDown(nf, 2 * nf, t_dim, dropout, activation)  # 16x16
         self.enc2 = ResDown(2 * nf, 4 * nf, t_dim, dropout, activation)  # 8x8
-        self.enc3 = ResDown(4 * nf, 4 * nf, t_dim, dropout, activation)  # 4x4
-        self.bottleneck = Bottleneck(4 * nf, 4 * nf, t_dim, dropout, activation)  # 2x2
-        self.dec3 = UpRes(4 * nf, 4 * nf, t_dim, dropout, activation)  # 4x4
+        self.enc3 = ResDown(4 * nf, 16 * nf, t_dim, dropout, activation)  # 4x4
+        self.bottleneck = Bottleneck(
+            16 * nf, 16 * nf, t_dim, dropout, activation
+        )  # 2x2
+        self.dec3 = UpRes(16 * nf, 4 * nf, t_dim, dropout, activation)  # 4x4
         self.dec2 = UpRes(4 * nf, 2 * nf, t_dim, dropout, activation)  # 8x8
         self.dec1 = UpRes(2 * nf, nf, t_dim, dropout, activation)  # 16x16
-        self.tail = FinalConv(nf, n_channels)  # 32x32
+        self.tail = FinalConv(nf, n_channels, activation)  # 32x32
 
     def forward(self, x, t_emb):
         x = self.head(x, t_emb)
