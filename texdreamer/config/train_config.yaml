@@ -1,0 +1,26 @@
+# config/train_config.yaml
+
+model:
+  cache_dir: "~/huggingface/hf_models"
+  pretrained_model: "CompVis/stable-diffusion-v1-4"
+  text_encoder: "openai/clip-vit-large-patch14"
+  lora:
+    r: 16
+    alpha: 32
+
+training:
+  batch_size: 1
+  num_epochs: 10
+  learning_rate: 0.0001
+
+data:
+  cache_dir: "~/huggingface/hf_datasets"
+  split: "train"
+  prompts_file: "data/atlas_prompt_50k.txt"
+
+output:
+  save_dir: "checkpoints/t2uv/"
+  log_every: 10
+
+# pretrained_model: "CompVis/stable-diffusion-v1-4"
+# text_encoder: "openai/clip-vit-large-patch14"
