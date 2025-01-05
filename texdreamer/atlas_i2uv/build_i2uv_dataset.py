@@ -1,0 +1,178 @@
+# build_i2uv_dataset.py
+
+import os
+import random
+import glob
+from PIL import Image
+from datasets import Dataset
+import numpy as np
+import torch
+from torchvision import transforms as T
+from tqdm import tqdm
+from pytorch3d.io import load_obj
+from pytorch3d.structures import Meshes
+from datasets.arrow_writer import ArrowWriter
+from datasets import load_dataset, Dataset, DatasetInfo, Features, Value, Image
+from pytorch3d.renderer import (
+    PerspectiveCameras,
+    RasterizationSettings,
+    MeshRenderer,
+    MeshRasterizer,
+    SoftPhongShader,
+    PointLights,
+    TexturesUV,
+)
+
+from smplx import SMPL
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Config
+ATLAS_DATASET_DIR = os.path.expanduser("~/huggingface/hf_datasets")
+SMPL_MODEL_PATH = os.path.expanduser("~/datasets/smpl/models")
+SMPL_TEMPLATE_OBJ_PATH = os.path.expanduser(
+    "~/datasets/smpl/models/smpl_uv_template.obj"
+)
+AMASS_DIR = os.path.expanduser("~/datasets/amass/CMU")
+SAVE_PATH = os.path.expanduser("~/huggingface/hf_datasets/atlas_large")
+POSES_PER_TEXTURE = 5
+
+IMAGE_SIZE = 1024
+RADIUS = 2.7
+FOCAL_LENGTH = 500.0
+
+
+# Transforms
+to_tensor = T.ToTensor()
+to_pil = T.ToPILImage()
+resize = T.Resize((IMAGE_SIZE, IMAGE_SIZE))
+
+
+# Load AMASS poses from SMPLX-N .npz files and extract SMPL part
+def load_amass_smpl_poses(amass_dir):
+    pose_list = []
+    count = 0
+    for path in glob.glob(os.path.join(amass_dir, "*/*.npz")):
+        count += 1
+        data = np.load(path)
+        poses = data.get("poses", [])  # shape [N, 165] for SMPLX
+        betas = data.get("betas", [])  # shape [10]
+        for i in range(min(len(poses), 100)):
+            smpl_pose = poses[i][:72]  # extract SMPL-compatible pose
+            pose_list.append(
+                {
+                    "global_orient": torch.tensor(smpl_pose[:3], dtype=torch.float32),
+                    "body_pose": torch.tensor(smpl_pose[3:], dtype=torch.float32),
+                    "betas": torch.tensor(betas[:10], dtype=torch.float32),
+                }
+            )
+    return pose_list
+
+
+# SMPL + renderer
+def load_smpl(model_folder):
+    model = SMPL(
+        model_path=model_folder,
+        gender="NEUTRAL",
+        use_pca=False,
+        create_global_orient=True,
+        create_body_pose=True,
+        create_betas=True,
+        create_transl=False,
+    ).to(DEVICE)
+
+    faces = torch.tensor(model.faces, dtype=torch.long, device=DEVICE)
+    return model, faces
+
+
+def setup_renderer():
+    cameras = PerspectiveCameras(
+        focal_length=((FOCAL_LENGTH, FOCAL_LENGTH),),
+        R=torch.eye(3).unsqueeze(0).to(DEVICE),
+        T=torch.tensor([[0.0, 0.0, RADIUS]]).to(DEVICE),
+        device=DEVICE,
+    )
+    raster_settings = RasterizationSettings(
+        image_size=IMAGE_SIZE,
+        blur_radius=0.0,
+        faces_per_pixel=1,
+    )
+    lights = PointLights(location=[[0.0, 2.0, 2.0]], device=DEVICE)
+    renderer = MeshRenderer(
+        rasterizer=MeshRasterizer(cameras=cameras, raster_settings=raster_settings),
+        shader=SoftPhongShader(device=DEVICE, cameras=cameras, lights=lights),
+    )
+    return renderer
+
+
+def load_uv_from_obj(obj_path):
+    verts, faces, aux = load_obj(obj_path, load_textures=True)
+    verts_uvs = aux.verts_uvs.to(DEVICE)  # [N_uv_verts, 2]
+    faces_uvs = faces.textures_idx.to(DEVICE)  # [F, 3]
+    return verts_uvs, faces_uvs
+
+
+# Main
+if __name__ == "__main__":
+    # features of atlas large dataset
+    features = Features(
+        {
+            "image": Image(),  # RGB image (rendered)
+            "texture": Image(),  # UV texture
+        }
+    )
+
+    writer = ArrowWriter(path=SAVE_PATH, features=features)
+
+    print("Loading ATLAS dataset...")
+    ds = load_dataset("ggxxii/ATLAS", split="train", cache_dir=ATLAS_DATASET_DIR)
+    atlas = ds.select(range(10))
+
+    print("Loading AMASS poses...")
+    pose_list = load_amass_smpl_poses(AMASS_DIR)
+    print(f"Loaded {len(pose_list)} poses.")
+
+    print("Preparing SMPL and renderer...")
+    smpl_model, faces = load_smpl(SMPL_MODEL_PATH)
+    verts_uvs, faces_uvs = load_uv_from_obj(SMPL_TEMPLATE_OBJ_PATH)
+    renderer = setup_renderer()
+
+    rendered_examples = {"texture": [], "image": []}
+
+    for idx in tqdm(range(len(atlas))):
+        uv_img = atlas[idx]["image"].convert("RGB")
+
+        # Apply same texture across a few random poses
+        for p in random.sample(pose_list, k=POSES_PER_TEXTURE):
+            smpl_output = smpl_model(
+                global_orient=p["global_orient"].unsqueeze(0).to(DEVICE),
+                body_pose=p["body_pose"].unsqueeze(0).to(DEVICE),
+                betas=p["betas"].unsqueeze(0).to(DEVICE),
+                pose2rot=True,
+            )
+            verts = smpl_output.vertices[0]
+
+            tex = to_tensor(uv_img).unsqueeze(0).to(DEVICE)
+            tex = resize(tex).permute(0, 2, 3, 1)
+            textures = TexturesUV(
+                maps=tex,
+                verts_uvs=verts_uvs.unsqueeze(0),
+                faces_uvs=faces_uvs.unsqueeze(0),
+            )
+            mesh = Meshes(verts=[verts], faces=[faces], textures=textures)
+
+            rendered = renderer(mesh)[0, ..., :3]  # [H,W,3]
+            rendered = (rendered.clamp(0, 1) * 255).byte().cpu()
+            rendered_img = to_pil(rendered.permute(2, 0, 1))
+            writer.write(
+                {
+                    "image": rendered_img,
+                    "texture": uv_img,
+                }
+            )
+            # rendered_examples["image"].append(rendered_img)  # ← RGB render
+            # rendered_examples["texture"].append(uv_img)  # ← original UV texture
+
+    print(f"Saving final dataset to: {SAVE_PATH}")
+    Dataset.from_dict(rendered_examples).save_to_disk(SAVE_PATH)
+    print("Done")
