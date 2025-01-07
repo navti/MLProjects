@@ -24,17 +24,20 @@ from pytorch3d.renderer import (
 )
 
 from smplx import SMPL
+import math
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Config
+PROMPTS_FILE = os.path.abspath("./data/atlas_prompt_50k.txt")
 ATLAS_DATASET_DIR = os.path.expanduser("~/huggingface/hf_datasets")
 SMPL_MODEL_PATH = os.path.expanduser("~/datasets/smpl/models")
 SMPL_TEMPLATE_OBJ_PATH = os.path.expanduser(
     "~/datasets/smpl/models/smpl_uv_template.obj"
 )
 AMASS_DIR = os.path.expanduser("~/datasets/amass/CMU")
-SAVE_PATH = os.path.expanduser("~/huggingface/hf_datasets/atlas_large")
+ATLAS_LARGE_DIR = os.path.expanduser("/mnt/ssdp3/datasets/atlas_large")
+ATLAS_LARGE_TMP_DIR = os.path.expanduser("~/huggingface/hf_datasets/atlas_tmp")
 POSES_PER_TEXTURE = 5
 
 IMAGE_SIZE = 1024
@@ -46,6 +49,12 @@ FOCAL_LENGTH = 500.0
 to_tensor = T.ToTensor()
 to_pil = T.ToPILImage()
 resize = T.Resize((IMAGE_SIZE, IMAGE_SIZE))
+
+
+# load prompts file
+def load_prompts(prompts_file):
+    with open(prompts_file, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f.readlines() if line.strip()]
 
 
 # Load AMASS poses from SMPLX-N .npz files and extract SMPL part
@@ -81,17 +90,72 @@ def load_smpl(model_folder):
         create_transl=False,
     ).to(DEVICE)
 
-    faces = torch.tensor(model.faces, dtype=torch.long, device=DEVICE)
+    faces = torch.tensor(model.faces.astype(np.int64), device=DEVICE)
     return model, faces
 
 
-def setup_renderer():
+def rotation_matrix(x_deg=0.0, y_deg=0.0, z_deg=0.0):
+    # Convert degrees to radians
+    x_rad = math.radians(x_deg)
+    y_rad = math.radians(y_deg)
+    z_rad = math.radians(z_deg)
+
+    # Rotation matrix around X-axis
+    Rx = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, math.cos(x_rad), -math.sin(x_rad)],
+            [0.0, math.sin(x_rad), math.cos(x_rad)],
+        ],
+        dtype=torch.float32,
+    )
+
+    # Rotation matrix around Y-axis
+    Ry = torch.tensor(
+        [
+            [math.cos(y_rad), 0.0, math.sin(y_rad)],
+            [0.0, 1.0, 0.0],
+            [-math.sin(y_rad), 0.0, math.cos(y_rad)],
+        ],
+        dtype=torch.float32,
+    )
+
+    # Rotation matrix around Z-axis
+    Rz = torch.tensor(
+        [
+            [math.cos(z_rad), -math.sin(z_rad), 0.0],
+            [math.sin(z_rad), math.cos(z_rad), 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+
+    # Final combined rotation matrix: R = Rz @ Ry @ Rx
+    R = Rz @ Ry @ Rx
+    return R
+
+
+def get_random_cam():
+    focal_len = 3.3
+    tx = 0.0
+    ty = 0.3
+    tz = 3.0
+    Tr = torch.tensor([tx, ty, tz])
+    ro_angles = list(range(0, 360, 60))
+    ro_x, ro_z = 0, 0
+    ro_y = random.sample(ro_angles, k=1)[0]
+    Ro = rotation_matrix(ro_x, ro_y, ro_z)
     cameras = PerspectiveCameras(
-        focal_length=((FOCAL_LENGTH, FOCAL_LENGTH),),
-        R=torch.eye(3).unsqueeze(0).to(DEVICE),
-        T=torch.tensor([[0.0, 0.0, RADIUS]]).to(DEVICE),
+        focal_length=((focal_len, focal_len),),
+        R=Ro.unsqueeze(0).to(DEVICE),
+        T=Tr.unsqueeze(0).to(DEVICE),
         device=DEVICE,
     )
+    return cameras
+
+
+def setup_renderer():
+    cameras = get_random_cam()
     raster_settings = RasterizationSettings(
         image_size=IMAGE_SIZE,
         blur_radius=0.0,
@@ -119,10 +183,12 @@ if __name__ == "__main__":
         {
             "image": Image(),  # RGB image (rendered)
             "texture": Image(),  # UV texture
+            "prompt": Value("string"),  # New: prompt string
         }
     )
 
-    writer = ArrowWriter(path=SAVE_PATH, features=features)
+    os.makedirs(ATLAS_LARGE_TMP_DIR, exist_ok=True)
+    writer = ArrowWriter(path=ATLAS_LARGE_TMP_DIR + "/data.arrow", features=features)
 
     print("Loading ATLAS dataset...")
     ds = load_dataset("ggxxii/ATLAS", split="train", cache_dir=ATLAS_DATASET_DIR)
@@ -135,17 +201,17 @@ if __name__ == "__main__":
     print("Preparing SMPL and renderer...")
     smpl_model, faces = load_smpl(SMPL_MODEL_PATH)
     verts_uvs, faces_uvs = load_uv_from_obj(SMPL_TEMPLATE_OBJ_PATH)
-    renderer = setup_renderer()
 
-    rendered_examples = {"texture": [], "image": []}
-
+    prompts = load_prompts(prompts_file=PROMPTS_FILE)
     for idx in tqdm(range(len(atlas))):
-        uv_img = atlas[idx]["image"].convert("RGB")
+        uv_img = atlas[idx]["image"]  # .convert("RGB")
+        assert uv_img.mode == "RGBA"
 
         # Apply same texture across a few random poses
         for p in random.sample(pose_list, k=POSES_PER_TEXTURE):
+            renderer = setup_renderer()
             smpl_output = smpl_model(
-                global_orient=p["global_orient"].unsqueeze(0).to(DEVICE),
+                # global_orient=p["global_orient"].unsqueeze(0).to(DEVICE),
                 body_pose=p["body_pose"].unsqueeze(0).to(DEVICE),
                 betas=p["betas"].unsqueeze(0).to(DEVICE),
                 pose2rot=True,
@@ -153,7 +219,9 @@ if __name__ == "__main__":
             verts = smpl_output.vertices[0]
 
             tex = to_tensor(uv_img).unsqueeze(0).to(DEVICE)
-            tex = resize(tex).permute(0, 2, 3, 1)
+            tex = resize(tex)
+            tex = tex[:, :3, :, :]
+            tex = tex.permute(0, 2, 3, 1)
             textures = TexturesUV(
                 maps=tex,
                 verts_uvs=verts_uvs.unsqueeze(0),
@@ -168,11 +236,20 @@ if __name__ == "__main__":
                 {
                     "image": rendered_img,
                     "texture": uv_img,
+                    "prompt": prompts[idx],
                 }
             )
-            # rendered_examples["image"].append(rendered_img)  # ← RGB render
-            # rendered_examples["texture"].append(uv_img)  # ← original UV texture
 
-    print(f"Saving final dataset to: {SAVE_PATH}")
-    Dataset.from_dict(rendered_examples).save_to_disk(SAVE_PATH)
+    print(f"Saving tmp dataset to: {ATLAS_LARGE_TMP_DIR}")
+    writer.finalize()
+    print("Saved")
+    print(f"Now creating final dataset in {ATLAS_LARGE_DIR}")
+    # Path to arrow file (created by ArrowWriter)
+    arrow_file = os.path.join(ATLAS_LARGE_TMP_DIR, "data.arrow")
+
+    # Wrap Arrow file into Dataset
+    dataset = Dataset.from_file(arrow_file)
+    os.makedirs(ATLAS_LARGE_DIR, exist_ok=True)
+    # Save as a complete Hugging Face Dataset
+    dataset.save_to_disk(ATLAS_LARGE_DIR)
     print("Done")
