@@ -7,6 +7,7 @@ from PIL import Image
 from datasets import Dataset
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 from torchvision import transforms as T
 from tqdm import tqdm
 from pytorch3d.io import load_obj
@@ -24,7 +25,7 @@ from pytorch3d.renderer import (
 )
 
 from smplx import SMPL
-import math
+from dataset import HuggingFaceATLAS
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -38,8 +39,9 @@ SMPL_TEMPLATE_OBJ_PATH = os.path.expanduser(
 AMASS_DIR = os.path.expanduser("~/datasets/amass/CMU")
 ATLAS_LARGE_DIR = os.path.expanduser("/mnt/ssdp3/datasets/atlas_large")
 ATLAS_LARGE_TMP_DIR = os.path.expanduser("~/huggingface/hf_datasets/atlas_tmp")
-POSES_PER_TEXTURE = 5
+BATCH_SIZE = 16
 
+POSES_PER_TEXTURE = 5
 IMAGE_SIZE = 1024
 RADIUS = 2.7
 FOCAL_LENGTH = 500.0
@@ -94,74 +96,88 @@ def load_smpl(model_folder):
     return model, faces
 
 
-def rotation_matrix(x_deg=0.0, y_deg=0.0, z_deg=0.0):
+def make_matrix(R, rads, axis="y"):
+    assert R.shape[0] == len(rads)
+    T = R.permute((1, 2, 0))
+
+    # x axis
+    if axis == "x":
+        T[1, 1, :] = torch.cos(rads)
+        T[1, 2, :] = -torch.sin(rads)
+        T[2, 1, :] = torch.sin(rads)
+        T[2, 2, :] = torch.cos(rads)
+
+    # y axis
+    elif axis == "y":
+        T[0, 0, :] = torch.cos(rads)
+        T[0, 2, :] = torch.sin(rads)
+        T[2, 0, :] = -torch.sin(rads)
+        T[2, 2, :] = torch.cos(rads)
+    # z axis
+    else:
+        T[0, 0, :] = torch.cos(rads)
+        T[0, 1, :] = -torch.sin(rads)
+        T[1, 0, :] = torch.sin(rads)
+        T[1, 1, :] = torch.cos(rads)
+
+    T = T.permute(2, 0, 1)
+    return T
+
+
+# return batch rotation matrices: Bx3x3
+def rotation_matrix(x_degs, y_degs, z_degs):
+    B = x_degs.shape[0]
     # Convert degrees to radians
-    x_rad = math.radians(x_deg)
-    y_rad = math.radians(y_deg)
-    z_rad = math.radians(z_deg)
+    x_rads = torch.deg2rad(x_degs)
+    y_rads = torch.deg2rad(y_degs)
+    z_rads = torch.deg2rad(z_degs)
+
+    Rx = torch.eye(3).unsqueeze(0).repeat(B, 1, 1)
+    Ry = torch.eye(3).unsqueeze(0).repeat(B, 1, 1)
+    Rz = torch.eye(3).unsqueeze(0).repeat(B, 1, 1)
 
     # Rotation matrix around X-axis
-    Rx = torch.tensor(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, math.cos(x_rad), -math.sin(x_rad)],
-            [0.0, math.sin(x_rad), math.cos(x_rad)],
-        ],
-        dtype=torch.float32,
-    )
+    Rx = make_matrix(Rx, x_rads, axis="x")
 
     # Rotation matrix around Y-axis
-    Ry = torch.tensor(
-        [
-            [math.cos(y_rad), 0.0, math.sin(y_rad)],
-            [0.0, 1.0, 0.0],
-            [-math.sin(y_rad), 0.0, math.cos(y_rad)],
-        ],
-        dtype=torch.float32,
-    )
+    Ry = make_matrix(Ry, y_rads, axis="y")
 
     # Rotation matrix around Z-axis
-    Rz = torch.tensor(
-        [
-            [math.cos(z_rad), -math.sin(z_rad), 0.0],
-            [math.sin(z_rad), math.cos(z_rad), 0.0],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=torch.float32,
-    )
+    Rz = make_matrix(Rz, z_rads, axis="z")
 
     # Final combined rotation matrix: R = Rz @ Ry @ Rx
     R = Rz @ Ry @ Rx
     return R
 
 
-def get_random_cam():
-    focal_len = 3.3
+def get_random_cams(B):
+    focal_len = 3.1
     tx = 0.0
     ty = 0.3
     tz = 3.0
-    Tr = torch.tensor([tx, ty, tz])
-    ro_angles = list(range(0, 360, 60))
-    ro_x, ro_z = 0, 0
-    ro_y = random.sample(ro_angles, k=1)[0]
+    angles = torch.arange(0, 360, 60, dtype=torch.float32)
+    ro_y = angles[torch.multinomial(angles, B, replacement=True)]
+    ro_x = torch.zeros_like(ro_y)
+    ro_z = torch.zeros_like(ro_y)
     Ro = rotation_matrix(ro_x, ro_y, ro_z)
+    Tr = torch.tensor([tx, ty, tz]).unsqueeze(0).repeat(B, 1)
     cameras = PerspectiveCameras(
         focal_length=((focal_len, focal_len),),
-        R=Ro.unsqueeze(0).to(DEVICE),
-        T=Tr.unsqueeze(0).to(DEVICE),
+        R=Ro.to(DEVICE),
+        T=Tr.to(DEVICE),
         device=DEVICE,
     )
     return cameras
 
 
-def setup_renderer():
-    cameras = get_random_cam()
+def setup_renderer(B):
+    cameras = get_random_cams(B)
     raster_settings = RasterizationSettings(
         image_size=IMAGE_SIZE,
         blur_radius=0.0,
         faces_per_pixel=1,
     )
-    lights = PointLights(location=[[0.0, 2.0, 2.0]], device=DEVICE)
+    lights = PointLights(location=[[0.0, 2.0, 2.0]] * B, device=DEVICE)
     renderer = MeshRenderer(
         rasterizer=MeshRasterizer(cameras=cameras, raster_settings=raster_settings),
         shader=SoftPhongShader(device=DEVICE, cameras=cameras, lights=lights),
@@ -179,6 +195,7 @@ def load_uv_from_obj(obj_path):
 # Main
 if __name__ == "__main__":
     # features of atlas large dataset
+    B = BATCH_SIZE
     features = Features(
         {
             "image": Image(),  # RGB image (rendered)
@@ -191,8 +208,14 @@ if __name__ == "__main__":
     writer = ArrowWriter(path=ATLAS_LARGE_TMP_DIR + "/data.arrow", features=features)
 
     print("Loading ATLAS dataset...")
-    ds = load_dataset("ggxxii/ATLAS", split="train", cache_dir=ATLAS_DATASET_DIR)
-    atlas = ds.select(range(10))
+    # Dataset and dataloader
+    atlas_dataset = HuggingFaceATLAS(
+        split="train",
+        prompts_file=PROMPTS_FILE,
+        cache_dir=ATLAS_DATASET_DIR,
+        resize_dim=IMAGE_SIZE,
+    )
+    atlas_loader = DataLoader(atlas_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
     print("Loading AMASS poses...")
     pose_list = load_amass_smpl_poses(AMASS_DIR)
@@ -200,45 +223,56 @@ if __name__ == "__main__":
 
     print("Preparing SMPL and renderer...")
     smpl_model, faces = load_smpl(SMPL_MODEL_PATH)
+    faces = faces.unsqueeze(0).repeat(B, 1, 1)
     verts_uvs, faces_uvs = load_uv_from_obj(SMPL_TEMPLATE_OBJ_PATH)
-
-    prompts = load_prompts(prompts_file=PROMPTS_FILE)
-    for idx in tqdm(range(len(atlas))):
-        uv_img = atlas[idx]["image"]  # .convert("RGB")
-        assert uv_img.mode == "RGBA"
-
+    vdim, fdim = verts_uvs.ndim, faces_uvs.ndim
+    verts_uvs = verts_uvs.unsqueeze(0).repeat(B, *([1] * vdim))
+    faces_uvs = faces_uvs.unsqueeze(0).repeat(B, *([1] * fdim))
+    for batch in tqdm(atlas_loader):
+        prompts = batch["prompt"]
+        uv_imgs = batch["uv_image"]
         # Apply same texture across a few random poses
         for p in random.sample(pose_list, k=POSES_PER_TEXTURE):
-            renderer = setup_renderer()
+            renderer = setup_renderer(B)
+            gdim, pdim, bdim = (
+                p["global_orient"].ndim,
+                p["body_pose"].ndim,
+                p["betas"].ndim,
+            )
+            global_orient = p["global_orient"].unsqueeze(0).repeat(B, *([1] * gdim))
+            body_pose = p["body_pose"].unsqueeze(0).repeat(B, *([1] * pdim))
+            betas = p["betas"].unsqueeze(0).repeat(B, *([1] * bdim))
+            global_orient = torch.zeros(B, 3)
             smpl_output = smpl_model(
-                # global_orient=p["global_orient"].unsqueeze(0).to(DEVICE),
-                body_pose=p["body_pose"].unsqueeze(0).to(DEVICE),
-                betas=p["betas"].unsqueeze(0).to(DEVICE),
+                global_orient=global_orient.to(DEVICE),
+                body_pose=body_pose.to(DEVICE),
+                betas=betas.to(DEVICE),
                 pose2rot=True,
             )
-            verts = smpl_output.vertices[0]
-
-            tex = to_tensor(uv_img).unsqueeze(0).to(DEVICE)
+            verts = smpl_output.vertices
+            tex = uv_imgs.to(DEVICE)
             tex = resize(tex)
             tex = tex[:, :3, :, :]
             tex = tex.permute(0, 2, 3, 1)
             textures = TexturesUV(
                 maps=tex,
-                verts_uvs=verts_uvs.unsqueeze(0),
-                faces_uvs=faces_uvs.unsqueeze(0),
+                verts_uvs=verts_uvs,
+                faces_uvs=faces_uvs,
             )
-            mesh = Meshes(verts=[verts], faces=[faces], textures=textures)
-
-            rendered = renderer(mesh)[0, ..., :3]  # [H,W,3]
+            mesh = Meshes(verts=verts, faces=faces, textures=textures)
+            rendered = renderer(mesh)[..., :3]  # [B,H,W,3]
             rendered = (rendered.clamp(0, 1) * 255).byte().cpu()
-            rendered_img = to_pil(rendered.permute(2, 0, 1))
-            writer.write(
-                {
-                    "image": rendered_img,
-                    "texture": uv_img,
-                    "prompt": prompts[idx],
-                }
-            )
+            for r_img, uv_img, prompt in zip(rendered, uv_imgs, prompts):
+                uv_img = to_pil(uv_img)
+                rendered_img = to_pil(r_img.permute(2, 0, 1))
+                writer.write(
+                    {
+                        "image": rendered_img,
+                        "texture": uv_img,
+                        "prompt": prompt,
+                    }
+                )
+        break
 
     print(f"Saving tmp dataset to: {ATLAS_LARGE_TMP_DIR}")
     writer.finalize()

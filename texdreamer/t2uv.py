@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 import os
 
-from dataset import HuggingFaceATLAS
+from atlas_dataset.dataset import HuggingFaceATLAS
 from lora_patch import apply_lora_to_model
 
 
