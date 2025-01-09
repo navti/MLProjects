@@ -43,6 +43,8 @@ BATCH_SIZE = 16
 
 POSES_PER_TEXTURE = 5
 IMAGE_SIZE = 1024
+IMAGE_HEIGHT = 1024
+IMAGE_WIDTH = 768
 RADIUS = 2.7
 FOCAL_LENGTH = 500.0
 
@@ -151,9 +153,9 @@ def rotation_matrix(x_degs, y_degs, z_degs):
 
 
 def get_random_cams(B):
-    focal_len = 3.1
+    focal_len = 3.3
     tx = 0.0
-    ty = 0.3
+    ty = 0.2
     tz = 3.0
     angles = torch.arange(0, 360, 60, dtype=torch.float32)
     ro_y = angles[torch.multinomial(angles, B, replacement=True)]
@@ -173,7 +175,7 @@ def get_random_cams(B):
 def setup_renderer(B):
     cameras = get_random_cams(B)
     raster_settings = RasterizationSettings(
-        image_size=IMAGE_SIZE,
+        image_size=(IMAGE_HEIGHT, IMAGE_WIDTH),
         blur_radius=0.0,
         faces_per_pixel=1,
     )
@@ -272,7 +274,7 @@ if __name__ == "__main__":
                         "prompt": prompt,
                     }
                 )
-        break
+        # break
 
     print(f"Saving tmp dataset to: {ATLAS_LARGE_TMP_DIR}")
     writer.finalize()
