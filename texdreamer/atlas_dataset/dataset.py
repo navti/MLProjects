@@ -33,7 +33,7 @@ class HuggingFaceATLAS(Dataset):
 
     def __getitem__(self, idx):
         image = self.dataset[idx]["image"]
-        image = self.transform(image).float()
+        image = self.transform(image)
         prompt = self.prompts[idx]
         return {"prompt": prompt, "uv_image": image}
 

@@ -9,6 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms as T
 from tqdm import tqdm
+from PIL import Image as PILImage
 from pytorch3d.io import load_obj
 from pytorch3d.structures import Meshes
 from datasets.arrow_writer import ArrowWriter
@@ -22,9 +23,10 @@ from pytorch3d.renderer import (
     PointLights,
     TexturesUV,
 )
-
+from time import time
 from smplx import SMPL
 from dataset import HuggingFaceATLAS
+from multiprocessing import Process, Queue
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -38,7 +40,7 @@ SMPL_TEMPLATE_OBJ_PATH = os.path.expanduser(
 AMASS_DIR = os.path.expanduser("~/datasets/amass/CMU")
 ATLAS_LARGE_DIR = os.path.expanduser("/mnt/ssdp3/datasets/atlas_large")
 ATLAS_LARGE_TMP_DIR = os.path.expanduser("~/huggingface/hf_datasets/atlas_tmp")
-BATCH_SIZE = 16
+BATCH_SIZE = 64
 
 POSES_PER_TEXTURE = 5
 IMAGE_SIZE = 1024
@@ -47,6 +49,10 @@ IMAGE_WIDTH = 768
 RADIUS = 2.7
 FOCAL_LENGTH = 500.0
 
+# for multiprocessing
+NUM_WRITERS = 1
+NUM_WORKERS = 0
+WRITER_QUEUE_SIZE = 24
 
 # Transforms
 to_tensor = T.ToTensor()
@@ -193,6 +199,31 @@ def load_uv_from_obj(obj_path):
     return verts_uvs, faces_uvs
 
 
+# write worker will run as separate process to write to disk
+def write_worker(queue):
+    arrow_writer = ArrowWriter(
+        path=ATLAS_LARGE_TMP_DIR + "/data.arrow", features=features
+    )
+    while True:
+        item = queue.get()
+        if item is None:
+            break
+        rendered, uv_imgs, prompts = item
+        # r_img: HxWxC, uv_img: CxHxW
+        for r_img, uv_img, prompt in zip(rendered, uv_imgs, prompts):
+            uv_img = to_pil(uv_img)
+            r_img = to_pil(r_img.permute(2, 0, 1))
+            arrow_writer.write(
+                {
+                    "image": r_img,
+                    "texture": uv_img,
+                    "prompt": prompt,
+                }
+            )
+    print(f"Saving tmp dataset to: {ATLAS_LARGE_TMP_DIR}")
+    arrow_writer.finalize()
+
+
 # Main
 if __name__ == "__main__":
     # features of atlas large dataset
@@ -206,7 +237,12 @@ if __name__ == "__main__":
     )
 
     os.makedirs(ATLAS_LARGE_TMP_DIR, exist_ok=True)
-    writer = ArrowWriter(path=ATLAS_LARGE_TMP_DIR + "/data.arrow", features=features)
+    # writer = ArrowWriter(path=ATLAS_LARGE_TMP_DIR + "/data.arrow", features=features)
+
+    # multiprocess
+    writer_queue = Queue(maxsize=WRITER_QUEUE_SIZE)
+    writer_process = Process(target=write_worker, args=(writer_queue,))
+    writer_process.start()
 
     print("Loading ATLAS dataset...")
     # Dataset and dataloader
@@ -219,10 +255,10 @@ if __name__ == "__main__":
     atlas_loader = DataLoader(
         atlas_dataset,
         batch_size=BATCH_SIZE,
-        num_workers=os.cpu_count(),
+        num_workers=NUM_WORKERS,
         shuffle=True,
         pin_memory=True,
-        persistent_workers=True,
+        persistent_workers=False,
     )
 
     print("Loading AMASS poses...")
@@ -236,7 +272,7 @@ if __name__ == "__main__":
     vdim, fdim = verts_uvs.ndim, faces_uvs.ndim
     verts_uvs = verts_uvs.unsqueeze(0).repeat(B, *([1] * vdim))
     faces_uvs = faces_uvs.unsqueeze(0).repeat(B, *([1] * fdim))
-    for batch in tqdm(atlas_loader):
+    for bid, batch in enumerate(tqdm(atlas_loader)):
         prompts = batch["prompt"]
         uv_imgs = batch["uv_image"]
         renderer = setup_renderer(B)
@@ -268,20 +304,12 @@ if __name__ == "__main__":
             verts = smpl_output.vertices
             mesh = Meshes(verts=verts, faces=faces, textures=textures)
             rendered = renderer(mesh)[..., :3]  # [B,H,W,3]
-            rendered = (rendered.clamp(0, 1) * 255).byte().cpu()
-            for r_img, uv_img, prompt in zip(rendered, uv_imgs, prompts):
-                uv_img = to_pil(uv_img)
-                r_img = to_pil(r_img.permute(2, 0, 1))
-                writer.write(
-                    {
-                        "image": r_img,
-                        "texture": uv_img,
-                        "prompt": prompt,
-                    }
-                )
+            rendered = rendered.cpu()
+            writer_queue.put((rendered, uv_imgs, prompts))
 
-    print(f"Saving tmp dataset to: {ATLAS_LARGE_TMP_DIR}")
-    writer.finalize()
+    writer_queue.put(None)
+    writer_process.join()
+
     print("Saved")
     print(f"Now creating final dataset in {ATLAS_LARGE_DIR}")
     # Path to arrow file (created by ArrowWriter)
