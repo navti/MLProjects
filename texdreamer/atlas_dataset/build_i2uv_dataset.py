@@ -3,7 +3,6 @@
 import os
 import random
 import glob
-from PIL import Image
 from datasets import Dataset
 import numpy as np
 import torch
@@ -13,7 +12,7 @@ from tqdm import tqdm
 from pytorch3d.io import load_obj
 from pytorch3d.structures import Meshes
 from datasets.arrow_writer import ArrowWriter
-from datasets import load_dataset, Dataset, DatasetInfo, Features, Value, Image
+from datasets import Dataset, Features, Value, Image
 from pytorch3d.renderer import (
     PerspectiveCameras,
     RasterizationSettings,
@@ -217,7 +216,14 @@ if __name__ == "__main__":
         cache_dir=ATLAS_DATASET_DIR,
         resize_dim=IMAGE_SIZE,
     )
-    atlas_loader = DataLoader(atlas_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    atlas_loader = DataLoader(
+        atlas_dataset,
+        batch_size=BATCH_SIZE,
+        num_workers=os.cpu_count(),
+        shuffle=True,
+        pin_memory=True,
+        persistent_workers=True,
+    )
 
     print("Loading AMASS poses...")
     pose_list = load_amass_smpl_poses(AMASS_DIR)
@@ -233,15 +239,23 @@ if __name__ == "__main__":
     for batch in tqdm(atlas_loader):
         prompts = batch["prompt"]
         uv_imgs = batch["uv_image"]
+        renderer = setup_renderer(B)
+        tex = uv_imgs.to(DEVICE)
+        tex = tex[:, :3, :, :]
+        tex = tex.permute(0, 2, 3, 1)
+        textures = TexturesUV(
+            maps=tex,
+            verts_uvs=verts_uvs,
+            faces_uvs=faces_uvs,
+        )
         # Apply same texture across a few random poses
         for p in random.sample(pose_list, k=POSES_PER_TEXTURE):
-            renderer = setup_renderer(B)
             gdim, pdim, bdim = (
                 p["global_orient"].ndim,
                 p["body_pose"].ndim,
                 p["betas"].ndim,
             )
-            global_orient = p["global_orient"].unsqueeze(0).repeat(B, *([1] * gdim))
+            # global_orient = p["global_orient"].unsqueeze(0).repeat(B, *([1] * gdim))
             body_pose = p["body_pose"].unsqueeze(0).repeat(B, *([1] * pdim))
             betas = p["betas"].unsqueeze(0).repeat(B, *([1] * bdim))
             global_orient = torch.zeros(B, 3)
@@ -252,29 +266,19 @@ if __name__ == "__main__":
                 pose2rot=True,
             )
             verts = smpl_output.vertices
-            tex = uv_imgs.to(DEVICE)
-            tex = resize(tex)
-            tex = tex[:, :3, :, :]
-            tex = tex.permute(0, 2, 3, 1)
-            textures = TexturesUV(
-                maps=tex,
-                verts_uvs=verts_uvs,
-                faces_uvs=faces_uvs,
-            )
             mesh = Meshes(verts=verts, faces=faces, textures=textures)
             rendered = renderer(mesh)[..., :3]  # [B,H,W,3]
             rendered = (rendered.clamp(0, 1) * 255).byte().cpu()
             for r_img, uv_img, prompt in zip(rendered, uv_imgs, prompts):
                 uv_img = to_pil(uv_img)
-                rendered_img = to_pil(r_img.permute(2, 0, 1))
+                r_img = to_pil(r_img.permute(2, 0, 1))
                 writer.write(
                     {
-                        "image": rendered_img,
+                        "image": r_img,
                         "texture": uv_img,
                         "prompt": prompt,
                     }
                 )
-        # break
 
     print(f"Saving tmp dataset to: {ATLAS_LARGE_TMP_DIR}")
     writer.finalize()
