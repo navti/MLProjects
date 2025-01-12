@@ -3,7 +3,6 @@
 import os
 import random
 import glob
-from datasets import Dataset
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -13,7 +12,14 @@ from PIL import Image as PILImage
 from pytorch3d.io import load_obj
 from pytorch3d.structures import Meshes
 from datasets.arrow_writer import ArrowWriter
-from datasets import Dataset, Features, Value, Image
+from datasets import (
+    Dataset,
+    Features,
+    Value,
+    Image,
+    concatenate_datasets,
+    load_from_disk,
+)
 from pytorch3d.renderer import (
     PerspectiveCameras,
     RasterizationSettings,
@@ -50,9 +56,9 @@ RADIUS = 2.7
 FOCAL_LENGTH = 500.0
 
 # for multiprocessing
-NUM_WRITERS = 1
+NUM_WRITERS = 5
 NUM_WORKERS = 0
-WRITER_QUEUE_SIZE = 24
+WRITER_QUEUE_SIZE = 2
 
 # Transforms
 to_tensor = T.ToTensor()
@@ -200,10 +206,10 @@ def load_uv_from_obj(obj_path):
 
 
 # write worker will run as separate process to write to disk
-def write_worker(queue):
-    arrow_writer = ArrowWriter(
-        path=ATLAS_LARGE_TMP_DIR + "/data.arrow", features=features
-    )
+def write_worker(idx, queue):
+    in_shard_path = f"{ATLAS_LARGE_DIR}/shard_{idx}.arrow"
+    out_shard_path = f"{ATLAS_LARGE_TMP_DIR}/shard_{idx}"
+    arrow_writer = ArrowWriter(path=in_shard_path, features=features)
     while True:
         item = queue.get()
         if item is None:
@@ -220,8 +226,13 @@ def write_worker(queue):
                     "prompt": prompt,
                 }
             )
-    print(f"Saving tmp dataset to: {ATLAS_LARGE_TMP_DIR}")
+    print(f"Saving file to: {in_shard_path}")
     arrow_writer.finalize()
+    ds = Dataset.from_file(in_shard_path)
+    print(f"Saving to disk: {out_shard_path}")
+    ds.save_to_disk(out_shard_path)
+    print(f"Deleting file: {in_shard_path}")
+    os.remove(in_shard_path)
 
 
 # Main
@@ -240,9 +251,15 @@ if __name__ == "__main__":
     # writer = ArrowWriter(path=ATLAS_LARGE_TMP_DIR + "/data.arrow", features=features)
 
     # multiprocess
-    writer_queue = Queue(maxsize=WRITER_QUEUE_SIZE)
-    writer_process = Process(target=write_worker, args=(writer_queue,))
-    writer_process.start()
+    queues = [Queue(maxsize=WRITER_QUEUE_SIZE) for _ in range(NUM_WRITERS)]
+    writer_processes = []
+    for i in range(NUM_WRITERS):
+        p = Process(target=write_worker, args=(i, queues[i]))
+        p.start()
+        writer_processes.append(p)
+    # writer_queue = Queue(maxsize=WRITER_QUEUE_SIZE)
+    # writer_process = Process(target=write_worker, args=(writer_queue,))
+    # writer_process.start()
 
     print("Loading ATLAS dataset...")
     # Dataset and dataloader
@@ -285,7 +302,7 @@ if __name__ == "__main__":
             faces_uvs=faces_uvs,
         )
         # Apply same texture across a few random poses
-        for p in random.sample(pose_list, k=POSES_PER_TEXTURE):
+        for p_id, p in enumerate(random.sample(pose_list, k=POSES_PER_TEXTURE)):
             gdim, pdim, bdim = (
                 p["global_orient"].ndim,
                 p["body_pose"].ndim,
@@ -305,19 +322,23 @@ if __name__ == "__main__":
             mesh = Meshes(verts=verts, faces=faces, textures=textures)
             rendered = renderer(mesh)[..., :3]  # [B,H,W,3]
             rendered = rendered.cpu()
-            writer_queue.put((rendered, uv_imgs, prompts))
+            queues[p_id % NUM_WRITERS].put((rendered, uv_imgs, prompts))
+        # if bid > 4:
+        #     break
+    # writer_queue.put(None)
+    # writer_process.join()
 
-    writer_queue.put(None)
-    writer_process.join()
+    # Stop workers
+    for q in queues:
+        q.put(None)
+    for p in writer_processes:
+        p.join()
 
-    print("Saved")
+    # Merge all arrow files and save in a tmp directory
+    print("Merging all arrow files")
+    shard_dirs = [f"{ATLAS_LARGE_TMP_DIR}/shard_{idx}" for idx in range(NUM_WRITERS)]
+    datasets = [load_from_disk(shard_dir) for shard_dir in shard_dirs]
     print(f"Now creating final dataset in {ATLAS_LARGE_DIR}")
-    # Path to arrow file (created by ArrowWriter)
-    arrow_file = os.path.join(ATLAS_LARGE_TMP_DIR, "data.arrow")
-
-    # Wrap Arrow file into Dataset
-    dataset = Dataset.from_file(arrow_file)
-    os.makedirs(ATLAS_LARGE_DIR, exist_ok=True)
-    # Save as a complete Hugging Face Dataset
-    dataset.save_to_disk(ATLAS_LARGE_DIR)
+    final_dataset = concatenate_datasets(datasets)
+    final_dataset.save_to_disk(ATLAS_LARGE_DIR)
     print("Done")
