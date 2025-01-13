@@ -49,15 +49,13 @@ class ATLASLarge(Dataset):
     ):
         self.task = task
         self.dataset = load_from_disk(cache_dir)
-        tex_transforms = transforms.Compose(
-            [
-                transforms.Resize((resize_tex, resize_tex)),
-                transforms.Lambda(lambda img: img.convert("RGB")),
-                transforms.ToTensor(),
-            ]
-        )
+        tex_transforms = [
+            transforms.Resize((resize_tex, resize_tex)),
+            transforms.Lambda(lambda img: img.convert("RGB")),
+            transforms.ToTensor(),
+        ]
         if normalize:
-            tex_transforms.append(transforms.Normalize(mean=[0.5] * 4, std=[0.5] * 4))
+            tex_transforms.append(transforms.Normalize(mean=[0.5] * 3, std=[0.5] * 3))
         self.transform_tex = transforms.Compose(tex_transforms)
 
         if task == "i2uv":
