@@ -14,7 +14,7 @@ training:
   learning_rate: 0.0001
 
 data:
-  cache_dir: "~/huggingface/hf_datasets"
+  cache_dir: "/mnt/ssdp3/datasets/atlas_large"
   split: "train"
   prompts_file: "data/atlas_prompt_50k.txt"
 
