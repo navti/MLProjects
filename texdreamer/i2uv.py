@@ -5,7 +5,7 @@ from transformers import CLIPVisionModel, CLIPImageProcessor
 from diffusers import StableDiffusionPipeline, DDPMScheduler
 from torch.optim import AdamW
 from tqdm import tqdm
-
+from lora_utils import *
 from atlas_dataset.dataset import ATLASLarge  # your dataset class
 
 # read config
@@ -30,19 +30,6 @@ vision_model = (
 vision_proc = CLIPImageProcessor.from_pretrained(
     cfg["model"]["text_encoder"], cache_dir=model_cache
 )
-
-
-def set_requires_grad(module, requires_grad: bool = True):
-    """
-    Freezes or unfreezes the parameters of a given module.
-
-    Args:
-        module (torch.nn.Module): The module to modify.
-        requires_grad (bool): Whether the parameters should require gradients.
-                              Set to False to freeze, True to unfreeze.
-    """
-    for param in module.parameters():
-        param.requires_grad = requires_grad
 
 
 # projection / aligner  (trainable)
@@ -111,13 +98,27 @@ pipe = StableDiffusionPipeline.from_pretrained(
     torch_dtype=dtype,
     low_cpu_mem_usage=True,
 ).to(device)
+
 pipe.enable_xformers_memory_efficient_attention()
 pipe.unet.enable_gradient_checkpointing()
+
+# Apply LoRA structure to UNet first
+unet = apply_lora_to_model(
+    pipe.unet,
+    r=cfg["model"]["lora"]["r"],
+    alpha=cfg["model"]["lora"]["alpha"],
+)
+
+# Then load pre-trained adapter weights
+lora_path = cfg["model"].get("lora_load_path", "checkpoints/t2uv/lora_adapter_t2uv.pth")
+lora_path = os.path.expanduser(lora_path)
+load_lora_adapters(unet, lora_path)
+
 set_requires_grad(pipe.vae, False)
+freeze_all_but_lora(unet)
 
 vae = pipe.vae  # frozen
 scheduler = pipe.scheduler  # DDPM config
-unet = pipe.unet  # trainable
 
 # dataset / dataloader
 dataset = ATLASLarge(

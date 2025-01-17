@@ -12,13 +12,26 @@ import torch.nn.functional as F
 import os
 
 from atlas_dataset.dataset import HuggingFaceATLAS
-from lora_patch import apply_lora_to_model
+from lora_utils import *
 
 
 with open("config/train_config.yaml", "r") as f:
     cfg = yaml.safe_load(f)
 model_cache_path = os.path.expanduser(cfg["model"]["cache_dir"])
 data_cache_path = os.path.expanduser(cfg["data"]["cache_dir"])
+
+
+def set_requires_grad(module, requires_grad: bool = True):
+    """
+    Freezes or unfreezes the parameters of a given module.
+
+    Args:
+        module (torch.nn.Module): The module to modify.
+        requires_grad (bool): Whether the parameters should require gradients.
+                              Set to False to freeze, True to unfreeze.
+    """
+    for param in module.parameters():
+        param.requires_grad = requires_grad
 
 
 def main():
@@ -40,16 +53,15 @@ def main():
         cfg["model"]["text_encoder"], cache_dir=model_cache_path
     ).to(device)
 
-    for param in text_encoder.parameters():
-        param.requires_grad = False
-
     # Apply LoRA
-    unet, text_encoder = apply_lora_to_model(
+    unet = apply_lora_to_model(
         pipe.unet,
-        text_encoder,
         r=cfg["model"]["lora"]["r"],
         alpha=cfg["model"]["lora"]["alpha"],
     )
+
+    set_requires_grad(text_encoder, requires_grad=False)
+    freeze_all_but_lora(unet)
 
     # Dataset and dataloader
     dataset = HuggingFaceATLAS(
@@ -121,7 +133,12 @@ def main():
                     )
                 # print(f"Step {step}, Loss: {accumulated_loss:.4f}")
                 accumulated_loss = 0
-            # torch.cuda.empty_cache()
+    # Save LoRA adapter weights
+    save_path = cfg["output"].get(
+        "lora_save_path", "checkpoints/t2uv/lora_adapter_t2uv.pth"
+    )
+    save_path = os.path.expanduser(save_path)
+    save_lora_adapters(unet, save_path)
 
 
 if __name__ == "__main__":
