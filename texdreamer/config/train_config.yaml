@@ -9,9 +9,14 @@ model:
     alpha: 32
 
 training:
-  batch_size: 1
-  num_epochs: 10
-  learning_rate: 0.0001
+  t2uv:
+    batch_size: 2
+    num_epochs: 10
+    learning_rate: 0.0001
+  i2uv:
+    batch_size: 4
+    num_epochs: 10
+    learning_rate: 0.0001
 
 data:
   cache_dir: "/mnt/ssdp3/datasets/atlas_large"
@@ -19,7 +24,9 @@ data:
   prompts_file: "data/atlas_prompt_50k.txt"
 
 output:
-  save_dir: "checkpoints/t2uv/"
+  t2uv_dir: "checkpoints/t2uv/"
+  i2uv_dir: "checkpoints/i2uv/"
+  out_dir: "inference/"
   log_every: 10
 
 # pretrained_model: "CompVis/stable-diffusion-v1-4"
