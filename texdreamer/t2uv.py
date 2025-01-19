@@ -9,9 +9,10 @@ from torch.optim import AdamW
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
+from torch.cuda.amp import GradScaler
 import os
 
-from atlas_dataset.dataset import HuggingFaceATLAS
+from atlas_dataset.dataset import ATLASLarge
 from lora_utils import *
 
 
@@ -19,19 +20,6 @@ with open("config/train_config.yaml", "r") as f:
     cfg = yaml.safe_load(f)
 model_cache_path = os.path.expanduser(cfg["model"]["cache_dir"])
 data_cache_path = os.path.expanduser(cfg["data"]["cache_dir"])
-
-
-def set_requires_grad(module, requires_grad: bool = True):
-    """
-    Freezes or unfreezes the parameters of a given module.
-
-    Args:
-        module (torch.nn.Module): The module to modify.
-        requires_grad (bool): Whether the parameters should require gradients.
-                              Set to False to freeze, True to unfreeze.
-    """
-    for param in module.parameters():
-        param.requires_grad = requires_grad
 
 
 def main():
@@ -59,34 +47,33 @@ def main():
         r=cfg["model"]["lora"]["r"],
         alpha=cfg["model"]["lora"]["alpha"],
     )
-
+    pipe.unet = unet
     set_requires_grad(text_encoder, requires_grad=False)
     freeze_all_but_lora(unet)
 
     # Dataset and dataloader
-    dataset = HuggingFaceATLAS(
-        split=cfg["data"]["split"],
-        prompts_file=cfg["data"]["prompts_file"],
-        cache_dir=data_cache_path,
-    )
+    dataset = ATLASLarge(cache_dir=data_cache_path)
     dataloader = DataLoader(
-        dataset, batch_size=cfg["training"]["batch_size"], shuffle=True
+        dataset,
+        batch_size=cfg["training"]["t2uv"]["batch_size"],
+        shuffle=True,
+        drop_last=True,
     )
 
     optimizer = AdamW(
         unet.parameters(),
-        lr=cfg["training"]["learning_rate"],
+        lr=cfg["training"]["t2uv"]["learning_rate"],
     )
     scheduler = pipe.scheduler
 
     enable_amp = False
-    grad_accum_steps = 16
+    effective_batch_size = 16
+    batch_size = cfg["training"]["t2uv"]["batch_size"]
     accumulated_loss = 0
-    grad_scaler = torch.amp.GradScaler(enabled=enable_amp)
-    for epoch in range(cfg["training"]["num_epochs"]):
-        step = 0
-        total_steps = len(dataloader) // grad_accum_steps
-        for batch_idx, batch in enumerate(dataloader):
+    grad_scaler = GradScaler(enabled=enable_amp)
+    total_steps = len(dataloader)
+    for epoch in range(cfg["training"]["t2uv"]["num_epochs"]):
+        for step, batch in enumerate(dataloader):
             with torch.autocast(device.type, dtype=torch.float16, enabled=enable_amp):
                 text_inputs = tokenizer(
                     batch["prompt"],
@@ -99,7 +86,7 @@ def main():
                 text_embeds = text_encoder(input_ids=input_ids).last_hidden_state
                 text_embeds = text_embeds.half()
 
-                images = batch["uv_image"].to(device).half()
+                images = batch["texture"].to(device).half()
                 images = images * 2 - 1
                 latents = pipe.vae.encode(images).latent_dist.sample() * 0.18215
 
@@ -116,27 +103,23 @@ def main():
                     noisy_latents, timesteps, encoder_hidden_states=text_embeds
                 ).sample
                 loss = F.mse_loss(noise_pred, noise)
-            loss = loss / grad_accum_steps
+            loss = loss / (effective_batch_size / batch_size)
             grad_scaler.scale(loss).backward()
             accumulated_loss += loss.item()
-
-            if (batch_idx + 1) % grad_accum_steps == 0:
-                step += 1
+            if (step + 1) % (effective_batch_size / batch_size) == 0:
                 if grad_scaler.is_enabled():
                     grad_scaler.unscale_(optimizer)
                     grad_scaler.step(optimizer)
                     grad_scaler.update()
                 optimizer.zero_grad()
-                if step % cfg["output"]["log_every"] == 0:
+                if (step + 1) % cfg["output"]["log_every"] == 0:
                     print(
                         f"Epoch {epoch}, Step {step}/{total_steps}, Loss: {accumulated_loss:.4f}"
                     )
                 # print(f"Step {step}, Loss: {accumulated_loss:.4f}")
                 accumulated_loss = 0
     # Save LoRA adapter weights
-    save_path = cfg["output"].get(
-        "lora_save_path", "checkpoints/t2uv/lora_adapter_t2uv.pth"
-    )
+    save_path = cfg["output"].get("lora_save_path", "checkpoints/t2uv")
     save_path = os.path.expanduser(save_path)
     save_lora_adapters(unet, save_path)
 

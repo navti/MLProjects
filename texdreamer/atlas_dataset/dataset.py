@@ -43,8 +43,8 @@ class ATLASLarge(Dataset):
         self,
         task="t2uv",
         cache_dir="/mnt/ssdp3/datasets/atlas_large",
-        resize_tex=1024,
-        resize_img=(1024, 768),
+        resize_tex=512,
+        resize_img=(512, 384),
         normalize=True,
     ):
         self.task = task
