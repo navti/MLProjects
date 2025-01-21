@@ -58,7 +58,7 @@ class ATLASLarge(Dataset):
             tex_transforms.append(transforms.Normalize(mean=[0.5] * 3, std=[0.5] * 3))
         self.transform_tex = transforms.Compose(tex_transforms)
 
-        if task == "i2uv":
+        if task in ["i2uv", "joint"]:
             img_transforms = [transforms.Resize(resize_img), transforms.ToTensor()]
             if normalize:
                 img_transforms.append(
@@ -71,9 +71,11 @@ class ATLASLarge(Dataset):
 
     def __getitem__(self, idx):
         texture = self.transform_tex(self.dataset[idx]["texture"])
-        prompt = self.dataset[idx]["prompt"]
-        items = {"prompt": prompt, "texture": texture}
-        if self.task == "i2uv":
+        items = {"texture": texture}
+        if self.task in ["i2uv", "joint"]:
             image = self.transform_img(self.dataset[idx]["image"])
             items["image"] = image
+        if self.task in ["t2uv", "joint"]:
+            prompt = self.dataset[idx]["prompt"]
+            items["prompt"] = prompt
         return items

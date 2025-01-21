@@ -11,12 +11,21 @@ model:
 training:
   t2uv:
     batch_size: 2
+    effective_batch_size: 16
     num_epochs: 10
     learning_rate: 0.0001
   i2uv:
     batch_size: 4
+    effective_batch_size: 16
     num_epochs: 10
     learning_rate: 0.0001
+  joint:
+    batch_size: 8
+    effective_batch_size: 32
+    num_epochs: 10
+    learning_rate: 0.0001
+    alpha: 1.0
+    beta: 1.0
 
 data:
   cache_dir: "/mnt/ssdp3/datasets/atlas_large"
@@ -27,7 +36,7 @@ output:
   t2uv_dir: "checkpoints/t2uv/"
   i2uv_dir: "checkpoints/i2uv/"
   out_dir: "inference/"
-  log_every: 10
+  log_every: 32
 
 # pretrained_model: "CompVis/stable-diffusion-v1-4"
 # text_encoder: "openai/clip-vit-large-patch14"

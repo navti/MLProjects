@@ -147,7 +147,7 @@ def main():
     scheduler.set_timesteps(scheduler.config.num_train_timesteps)
 
     enable_amp = False
-    effective_batch_size = 16
+    effective_batch_size = cfg["training"]["i2uv"]["effective_batch_size"]
     batch_size = cfg["training"]["i2uv"]["batch_size"]
     accumulated_loss = 0
     grad_scaler = GradScaler(enabled=enable_amp)

@@ -67,7 +67,7 @@ def main():
     scheduler = pipe.scheduler
 
     enable_amp = False
-    effective_batch_size = 16
+    effective_batch_size = cfg["training"]["t2uv"]["effective_batch_size"]
     batch_size = cfg["training"]["t2uv"]["batch_size"]
     accumulated_loss = 0
     grad_scaler = GradScaler(enabled=enable_amp)
