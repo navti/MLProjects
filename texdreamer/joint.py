@@ -168,15 +168,14 @@ def main():
                         "total": total_loss.item(),
                     }
                 )
-
+            break
         # Save checkpoint
+        save_lora_adapters(unet, f"checkpoints/joint/epoch_{epoch}")
         torch.save(
-            {
-                "unet": unet.state_dict(),
-                "aligner": aligner.state_dict(),
-            },
-            f"checkpoints/it2uv/epoch_{epoch}.pth",
+            aligner.state_dict(),
+            f"checkpoints/joint/epoch_{epoch}/aligner.pth",
         )
+        break
 
 
 if __name__ == "__main__":
