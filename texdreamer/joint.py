@@ -12,8 +12,9 @@ from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 from lora_utils import *
 from atlas_dataset.dataset import ATLASLarge
-
 from i2uv import ImageAligner  # reuse aligner class
+from torch.utils.tensorboard import SummaryWriter
+import datetime
 
 with open("config/train_config.yaml") as f:
     cfg = yaml.safe_load(f)
@@ -24,6 +25,8 @@ data_cache = os.path.expanduser(cfg["data"]["cache_dir"])
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float16
+    log_dir = os.path.expanduser("logs")
+    writer = SummaryWriter(log_dir=log_dir)
 
     # Load SD pipeline
     pipe = StableDiffusionPipeline.from_pretrained(
@@ -97,7 +100,7 @@ def main():
     batch_size = cfg["training"]["joint"]["batch_size"]
     effective_batch_size = cfg["training"]["joint"]["effective_batch_size"]
     grad_scaler = GradScaler(enabled=enable_amp)
-
+    total_steps = 0
     for epoch in range(cfg["training"]["joint"]["num_epochs"]):
         pbar = tqdm(dataloader, desc=f"Epoch {epoch}")
         for step, batch in enumerate(pbar):
@@ -134,6 +137,7 @@ def main():
                 proc = vision_proc(
                     images=[img.cpu().permute(1, 2, 0).numpy() for img in raw_img],
                     return_tensors="pt",
+                    do_rescale=False,
                 ).to(device, dtype)
 
                 with torch.no_grad():
@@ -155,12 +159,16 @@ def main():
             grad_scaler.scale(total_loss).backward()
 
             if (step + 1) % (effective_batch_size / batch_size) == 0:
+                total_steps += 1
                 grad_scaler.unscale_(optimizer)
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
                 optimizer.zero_grad()
 
             if (step + 1) % cfg["output"]["log_every"] == 0:
+                writer.add_scalar("Loss/t2uv", loss_t2uv.item(), total_steps)
+                writer.add_scalar("Loss/i2uv", loss_i2uv.item(), total_steps)
+                writer.add_scalar("Loss/combined", total_loss.item(), total_steps)
                 pbar.set_postfix(
                     {
                         "loss_t2uv": loss_t2uv.item(),
@@ -168,14 +176,15 @@ def main():
                         "total": total_loss.item(),
                     }
                 )
-            break
+            # break
         # Save checkpoint
         save_lora_adapters(unet, f"checkpoints/joint/epoch_{epoch}")
         torch.save(
             aligner.state_dict(),
             f"checkpoints/joint/epoch_{epoch}/aligner.pth",
         )
-        break
+        # break
+    writer.close()
 
 
 if __name__ == "__main__":
