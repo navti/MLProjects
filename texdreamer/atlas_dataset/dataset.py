@@ -43,12 +43,18 @@ class ATLASLarge(Dataset):
         self,
         task="t2uv",
         cache_dir="/mnt/ssdp3/datasets/atlas_large",
+        download=False,
         resize_tex=512,
         resize_img=(512, 384),
         normalize=True,
     ):
         self.task = task
-        self.dataset = load_from_disk(cache_dir)
+        if download:
+            self.dataset = load_dataset(
+                "navintiwari/atlas-large", split="train", cache_dir=cache_dir
+            )
+        else:
+            self.dataset = load_from_disk(cache_dir)
         tex_transforms = [
             transforms.Resize((resize_tex, resize_tex)),
             transforms.Lambda(lambda img: img.convert("RGB")),

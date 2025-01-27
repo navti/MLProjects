@@ -14,7 +14,7 @@ from lora_utils import *
 from atlas_dataset.dataset import ATLASLarge
 from i2uv import ImageAligner  # reuse aligner class
 from torch.utils.tensorboard import SummaryWriter
-import datetime
+from accelerate import Accelerator
 
 with open("config/train_config.yaml") as f:
     cfg = yaml.safe_load(f)
@@ -23,7 +23,8 @@ data_cache = os.path.expanduser(cfg["data"]["cache_dir"])
 
 
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    accelerator = Accelerator()
+    device = accelerator.device
     dtype = torch.float16
     log_dir = os.path.expanduser("logs")
     writer = SummaryWriter(log_dir=log_dir)
@@ -75,7 +76,11 @@ def main():
 
     # Dataset
     dataset = ATLASLarge(
-        task="joint", cache_dir=data_cache, resize_img=(512, 384), resize_tex=512
+        task="joint",
+        download=True,
+        cache_dir=data_cache,
+        resize_img=(512, 384),
+        resize_tex=512,
     )
     dataloader = DataLoader(
         dataset,
@@ -92,6 +97,11 @@ def main():
     scheduler = pipe.scheduler
     scheduler.set_timesteps(scheduler.config.num_train_timesteps)
 
+    # Accelerator preparation
+    unet, aligner, optimizer, dataloader = accelerator.prepare(
+        unet, aligner, optimizer, dataloader
+    )
+
     # Training
     alpha = cfg["training"]["joint"].get("alpha", 1.0)  # T2UV loss weight
     beta = cfg["training"]["joint"].get("beta", 1.0)  # I2UV loss weight
@@ -104,7 +114,7 @@ def main():
     for epoch in range(cfg["training"]["joint"]["num_epochs"]):
         pbar = tqdm(dataloader, desc=f"Epoch {epoch}")
         for step, batch in enumerate(pbar):
-            with torch.autocast(device.type, dtype=dtype):
+            with torch.autocast(device_type=device.type, dtype=dtype):
                 # T2UV
                 text_inputs = tokenizer(
                     batch["prompt"],
@@ -156,13 +166,11 @@ def main():
                 total_loss = alpha * loss_t2uv + beta * loss_i2uv
                 total_loss = total_loss / (effective_batch_size / batch_size)
 
-            grad_scaler.scale(total_loss).backward()
+            accelerator.backward(total_loss)
 
             if (step + 1) % (effective_batch_size / batch_size) == 0:
                 total_steps += 1
-                grad_scaler.unscale_(optimizer)
-                grad_scaler.step(optimizer)
-                grad_scaler.update()
+                optimizer.step()
                 optimizer.zero_grad()
 
             if (step + 1) % cfg["output"]["log_every"] == 0:
@@ -176,14 +184,15 @@ def main():
                         "total": total_loss.item(),
                     }
                 )
-            # break
+
         # Save checkpoint
-        save_lora_adapters(unet, f"checkpoints/joint/epoch_{epoch}")
-        torch.save(
-            aligner.state_dict(),
-            f"checkpoints/joint/epoch_{epoch}/aligner.pth",
-        )
-        # break
+        if accelerator.is_main_process:
+            save_lora_adapters(unet, f"checkpoints/joint/epoch_{epoch}")
+            torch.save(
+                aligner.state_dict(),
+                f"checkpoints/joint/epoch_{epoch}/aligner.pth",
+            )
+
     writer.close()
 
 
