@@ -13,7 +13,6 @@ from torchvision import transforms
 from lora_utils import load_lora_adapters
 from joint import ImageAligner  # reuse the aligner class you trained
 
-
 # ---------- CLI ----------
 parser = argparse.ArgumentParser(
     description="Generate UV texture from text and/or image"
@@ -133,6 +132,8 @@ uv = (uv / 2 + 0.5).clamp(0, 1)  # back to [0,1]
 resized_uv = F.interpolate(uv, size=(1024, 1024), mode="bilinear", align_corners=False)
 
 # Save
-out_path = "generated_uv.png"
+outdir = "outputs"
+os.makedirs(outdir, exist_ok=True)
+out_path = f"{outdir}/uv.png"
 transforms.ToPILImage()(resized_uv[0].cpu()).save(out_path)
 print(f"Saved UV texture to {out_path}")
