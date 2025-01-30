@@ -15,6 +15,17 @@ from atlas_dataset.dataset import ATLASLarge
 from i2uv import ImageAligner  # reuse aligner class
 from torch.utils.tensorboard import SummaryWriter
 from accelerate import Accelerator
+import argparse
+
+# ---------- CLI ----------
+parser = argparse.ArgumentParser(description="Joint training for T2UV/I2UV")
+parser.add_argument(
+    "--lora", type=str, default=None, required=False, help="LoRA adapter path"
+)
+parser.add_argument(
+    "--aligner", type=str, default=None, required=False, help="Aligner weights (.pth)"
+)
+args = parser.parse_args()
 
 with open("config/train_config.yaml") as f:
     cfg = yaml.safe_load(f)
@@ -67,17 +78,28 @@ def main():
     aligner = ImageAligner(use_all_tokens=True, pooling="attention").to(device)
 
     # LoRA and UNet
-    unet = apply_lora_to_model(
-        pipe.unet, r=cfg["model"]["lora"]["r"], alpha=cfg["model"]["lora"]["alpha"]
-    )
+    if args.lora is not None:
+        # Apply LoRA
+        print(f"loading lora adapters from: {args.lora}")
+        unet = load_lora_adapters(pipe.unet, args.lora)
+    else:
+        unet = apply_lora_to_model(
+            pipe.unet, r=cfg["model"]["lora"]["r"], alpha=cfg["model"]["lora"]["alpha"]
+        )
     pipe.unet = unet
+
+    if args.aligner is not None:
+        # Load Aligner
+        print(f"loading aligner weights from: {args.aligner}")
+        aligner.load_state_dict(torch.load(args.aligner))
+
     set_requires_grad(pipe.vae, False)
     freeze_all_but_lora(unet)
 
     # Dataset
     dataset = ATLASLarge(
         task="joint",
-        download=True,
+        download=False,
         cache_dir=data_cache,
         resize_img=(512, 384),
         resize_tex=512,
@@ -88,6 +110,7 @@ def main():
         shuffle=True,
         num_workers=4,
         pin_memory=True,
+        drop_last=True,
     )
 
     optimizer = AdamW(
@@ -184,7 +207,6 @@ def main():
                         "total": total_loss.item(),
                     }
                 )
-
         # Save checkpoint
         if accelerator.is_main_process:
             save_lora_adapters(unet, f"checkpoints/joint/epoch_{epoch}")
@@ -192,7 +214,7 @@ def main():
                 aligner.state_dict(),
                 f"checkpoints/joint/epoch_{epoch}/aligner.pth",
             )
-
+        # break
     writer.close()
 
 
