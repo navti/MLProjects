@@ -13,6 +13,7 @@ from pytorch3d.renderer import (
     PointLights,
     TexturesUV,
 )
+import random
 from smplx import SMPL
 
 
@@ -34,11 +35,7 @@ def load_amass_smpl_poses(amass_dir, num_poses=10):
                     "betas": torch.tensor(betas[:10], dtype=torch.float32),
                 }
             )
-            if len(pose_list) == num_poses:
-                break
-        if len(pose_list) == num_poses:
-            break
-    return pose_list
+    return random.sample(pose_list, k=num_poses)
 
 
 # SMPL + renderer
