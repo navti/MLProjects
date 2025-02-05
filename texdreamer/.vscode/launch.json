@@ -1,0 +1,36 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: inference",
+            "type": "debugpy",
+            // "module": "torch.distributed.launch",
+            "request": "launch",
+            "program": "infer_uv.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--prompt", "African american, old woman, white shirt, black pants, brown hair",
+                // "--image", "1000",
+                "--lora", "checkpoints/joint/epoch_0",
+                "--aligner", "checkpoints/joint/epoch_0/aligner.pth",
+                "--steps", "50",
+                "--img-weight", "0.5",
+            ]
+        },
+        {
+            "name": "Python: joint training",
+            "type": "debugpy",
+            // "module": "torch.distributed.launch",
+            "request": "launch",
+            "program": "joint.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--lora", "checkpoints/joint/epoch_0",
+                "--aligner", "checkpoints/joint/epoch_0/aligner.pth",
+            ]
+        }
+    ]
+}
