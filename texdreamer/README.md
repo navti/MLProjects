@@ -158,9 +158,9 @@ tensorboard --logdir=logs
 
 ## 🧾 Acknowledgements
 
-* [TexDreamer (CVPR 2024)](https://arxiv.org/abs/2403.11393)
+* [TexDreamer (CVPR 2024)](https://arxiv.org/abs/2403.12906)
 * [Diffusers by Hugging Face](https://github.com/huggingface/diffusers)
-* [ATLAS Dataset](https://github.com/nkolot/atlas)
+* [ATLAS Dataset](https://huggingface.co/datasets/ggxxii/ATLAS)
 * [PEFT + LoRA](https://github.com/huggingface/peft)
 
 ---
