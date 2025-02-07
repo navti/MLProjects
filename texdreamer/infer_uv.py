@@ -11,7 +11,7 @@ from transformers import (
 from PIL import Image
 from torchvision import transforms
 from lora_utils import load_lora_adapters
-from joint import ImageAligner  # reuse the aligner class you trained
+from i2uv import ImageAligner  # reuse the aligner class you trained
 
 # ---------- CLI ----------
 parser = argparse.ArgumentParser(
